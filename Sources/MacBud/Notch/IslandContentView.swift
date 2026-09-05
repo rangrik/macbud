@@ -138,7 +138,13 @@ struct FooterBar: View {
     var body: some View {
         HStack(spacing: 14) {
             ForEach(coordinator.footerHints()) { hint in
-                KeyHint(keys: hint.keys, label: hint.label)
+                if let command = hint.command {
+                    Button { coordinator.handle(command) } label: { KeyHint(keys: hint.keys, label: hint.label) }
+                        .buttonStyle(FooterHintButtonStyle())
+                        .help("Click to \(hint.label.lowercased())")
+                } else {
+                    KeyHint(keys: hint.keys, label: hint.label)
+                }
             }
             Spacer(minLength: 8)
             if let hint = state.footerHint {
@@ -148,12 +154,27 @@ struct FooterBar: View {
                     .lineLimit(1)
                     .transition(.opacity)
             } else {
-                KeyHint(keys: "esc", label: "Close")
+                Button { coordinator.handle(.close) } label: { KeyHint(keys: coordinator.keys(for: .close), label: "Close") }
+                    .buttonStyle(FooterHintButtonStyle())
             }
         }
         .padding(.horizontal, 18)
         .frame(height: 36)
         .animation(.easeOut(duration: 0.15), value: state.footerHint)
+    }
+}
+
+/// Hairline-free, hover-brightening button used for the clickable footer hints.
+struct FooterHintButtonStyle: ButtonStyle {
+    @State private var hovering = false
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .padding(.horizontal, 5).padding(.vertical, 3)
+            .background((hovering || configuration.isPressed) ? Theme.rowHover : .clear, in: RoundedRectangle(cornerRadius: 6))
+            .opacity(configuration.isPressed ? 0.7 : 1)
+            .contentShape(Rectangle())
+            .onHover { hovering = $0 }
     }
 }
 

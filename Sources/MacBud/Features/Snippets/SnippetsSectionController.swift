@@ -141,8 +141,9 @@ final class SnippetsSectionController {
     }
 
     func expand(_ snippet: Snippet) -> SnippetExpander.Expansion {
-        let lastText = clipboard.items.first { $0.kind == .text || $0.kind == .link }?.text
-        return SnippetExpander.expand(snippet.content, context: SnippetExpander.Context(clipboard: lastText))
+        let current = NSPasteboard.general.string(forType: .string)
+        let latest = clipboard.items.filter { $0.kind == .text || $0.kind == .link }.max { $0.copiedAt < $1.copiedAt }?.text
+        return SnippetExpander.expand(snippet.content, context: SnippetExpander.Context(clipboard: current ?? latest))
     }
 
     private func move(by delta: Int, count: Int) {

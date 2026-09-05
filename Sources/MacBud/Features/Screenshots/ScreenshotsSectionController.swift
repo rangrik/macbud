@@ -2,8 +2,6 @@ import AppKit
 
 @Observable
 final class ScreenshotsSectionController {
-    static let columns = 2
-
     let library: ScreenshotLibrary
     let context: ActionContext
     var selectedIndex = 0
@@ -29,14 +27,11 @@ final class ScreenshotsSectionController {
 
     func handle(_ command: PanelCommand) -> Bool {
         let count = results.count
-        let cols = Self.columns
         switch command {
-        case .moveUp: move(by: -cols, count: count)
-        case .moveDown: move(by: cols, count: count)
-        case .moveLeft: move(by: -1, count: count)
-        case .moveRight: move(by: 1, count: count)
-        case .pageUp: move(by: -cols * 4, count: count)
-        case .pageDown: move(by: cols * 4, count: count)
+        case .moveUp, .moveLeft: move(by: -1, count: count)
+        case .moveDown, .moveRight: move(by: 1, count: count)
+        case .pageUp: move(by: -5, count: count)
+        case .pageDown: move(by: 5, count: count)
         case .moveToStart: selectedIndex = 0
         case .moveToEnd: selectedIndex = max(0, count - 1)
         case .primaryAction, .secondaryAction:

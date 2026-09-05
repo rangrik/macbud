@@ -84,6 +84,7 @@ import Testing
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("macbud-tests-\(UUID().uuidString)")
         let dataStore = DataStore(directory: dir)
         let store = ClipboardStore(dataStore: dataStore)
+        await store.load() // saves are ignored until the existing file has been read
         store.add(text("persist me"))
         try await Task.sleep(for: .milliseconds(600))
         let reloaded = ClipboardStore(dataStore: dataStore)

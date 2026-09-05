@@ -1,4 +1,5 @@
 import AppKit
+import Carbon.HIToolbox
 import ServiceManagement
 
 /// User preferences, persisted in UserDefaults. Observable so views update live.
@@ -25,6 +26,18 @@ final class AppSettings {
     var lastSection: Section = .clipboard { didSet { set(lastSection.rawValue, "lastSection") } }
     var hasSeenWelcome = false { didSet { set(hasSeenWelcome, "hasSeenWelcome") } }
     var clipboardPaused = false { didSet { set(clipboardPaused, "clipboardPaused") } }
+    var keyBindings: KeyBindings = .defaults { didSet { setCodable(keyBindings, "keyBindings") } }
+    var dictationHotKey: HotKey? = .defaultDictation { didSet { setCodable(dictationHotKey, "dictationHotKey") } }
+    /// Locale identifier for dictation; empty means "follow the system language".
+    var dictationLocale = "" { didSet { set(dictationLocale, "dictationLocale") } }
+    var showNotchTab = true { didSet { set(showNotchTab, "showNotchTab") } }
+    var hasConfiguredLaunchAtLogin = false { didSet { set(hasConfiguredLaunchAtLogin, "hasConfiguredLaunchAtLogin") } }
+
+    static let defaultSectionHotKeys: [Section: HotKey] = [
+        .clipboard: HotKey(keyCode: UInt16(kVK_ANSI_V), modifiers: [.option, .shift]),
+        .snippets: HotKey(keyCode: UInt16(kVK_ANSI_S), modifiers: [.option, .shift]),
+        .screenshots: HotKey(keyCode: UInt16(kVK_ANSI_4), modifiers: [.option, .shift]),
+    ]
 
     static let defaultIgnoredBundleIDs = [
         "com.1password.1password", "com.agilebits.onepassword7", "com.agilebits.onepassword-osx",
@@ -41,7 +54,12 @@ final class AppSettings {
         includeSubfolders = defaults.bool(forKey: "includeSubfolders")
         includeVideos = defaults.object(forKey: "includeVideos") as? Bool ?? true
         toggleHotKey = defaults.object(forKey: "toggleHotKey") == nil ? .defaultToggle : codable(HotKey.self, "toggleHotKey")
-        sectionHotKeys = codable([Section: HotKey].self, "sectionHotKeys") ?? [:]
+        sectionHotKeys = defaults.object(forKey: "sectionHotKeys") == nil ? Self.defaultSectionHotKeys : (codable([Section: HotKey].self, "sectionHotKeys") ?? [:])
+        keyBindings = codable(KeyBindings.self, "keyBindings") ?? .defaults
+        dictationHotKey = defaults.object(forKey: "dictationHotKey") == nil ? .defaultDictation : codable(HotKey.self, "dictationHotKey")
+        dictationLocale = defaults.string(forKey: "dictationLocale") ?? ""
+        showNotchTab = defaults.object(forKey: "showNotchTab") as? Bool ?? true
+        hasConfiguredLaunchAtLogin = defaults.bool(forKey: "hasConfiguredLaunchAtLogin")
         rememberLastSection = defaults.object(forKey: "rememberLastSection") as? Bool ?? true
         lastSection = defaults.string(forKey: "lastSection").flatMap(Section.init(rawValue:)) ?? .clipboard
         hasSeenWelcome = defaults.bool(forKey: "hasSeenWelcome")

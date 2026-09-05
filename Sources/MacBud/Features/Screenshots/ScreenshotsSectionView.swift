@@ -7,32 +7,31 @@ struct ScreenshotsSectionView: View {
     var body: some View {
         let results = controller.results.map { Ranked(item: $0.item, match: $0.match) }
         let query = controller.context.state.query
-        HStack(spacing: 0) {
-            Group {
-                if results.isEmpty {
-                    if controller.library.folders.isEmpty {
-                        EmptyState(symbol: "folder.badge.plus", title: "No folders configured", detail: "Add your screenshot folders in Settings (⌘,).")
-                    } else if query.isEmpty {
-                        EmptyState(symbol: "photo.on.rectangle.angled", title: controller.library.isScanning ? "Scanning…" : "No screenshots found",
-                                   detail: "Watching \(controller.library.folders.map(\.lastPathComponent).joined(separator: ", ")).")
-                    } else {
-                        EmptyState(symbol: "magnifyingglass", title: "No matches", detail: "Search matches file names.")
-                    }
-                } else {
-                    ThumbnailGrid(items: results, selectedIndex: controller.selectedIndex,
-                                  onSelect: { controller.selectedIndex = $0 },
-                                  onActivate: { controller.activate(results[$0].item, paste: controller.context.settings.enterAction == .paste) })
-                }
+        if results.isEmpty {
+            if controller.library.folders.isEmpty {
+                EmptyState(symbol: "folder.badge.plus", title: "No folders configured", detail: "Add your screenshot folders in Settings (⌘,).")
+            } else if query.isEmpty {
+                EmptyState(symbol: "photo.on.rectangle.angled", title: controller.library.isScanning ? "Scanning…" : "No screenshots found",
+                           detail: "Watching \(controller.library.folders.map(\.lastPathComponent).joined(separator: ", ")).")
+            } else {
+                EmptyState(symbol: "magnifyingglass", title: "No matches", detail: "Search matches file names.")
             }
-            .frame(width: 300)
-            Rectangle().fill(Theme.separator).frame(width: 1)
-            MediaPreview(item: controller.selected)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            VStack(spacing: 0) {
+                MediaPreview(item: controller.selected, position: controller.selectedIndex + 1, total: results.count)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                Rectangle().fill(Theme.separator).frame(height: 1)
+                Filmstrip(items: results, selectedIndex: controller.selectedIndex,
+                          onSelect: { controller.selectedIndex = $0 },
+                          onActivate: { controller.activate(results[$0].item, paste: controller.context.settings.enterAction == .paste) })
+                    .frame(height: 112)
+            }
         }
     }
 }
 
-struct ThumbnailGrid: View {
+/// Horizontal strip of thumbnails; ← → (or ↑ ↓) step through it, the selection stays centred.
+struct Filmstrip: View {
     let items: [Ranked<MediaItem>]
     let selectedIndex: Int
     let onSelect: (Int) -> Void
@@ -40,21 +39,23 @@ struct ThumbnailGrid: View {
 
     var body: some View {
         ScrollViewReader { proxy in
-            ScrollView {
-                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: ScreenshotsSectionController.columns), spacing: 8) {
+            ScrollView(.horizontal) {
+                LazyHStack(spacing: 10) {
                     ForEach(Array(items.enumerated()), id: \.element.id) { index, ranked in
                         ThumbnailCell(item: ranked.item, isSelected: index == selectedIndex)
+                            .frame(width: 148)
                             .onTapGesture(count: 2) { onActivate(index) }
                             .onTapGesture { onSelect(index) }
                             .id(ranked.id)
                     }
                 }
-                .padding(10)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 10)
             }
             .scrollIndicators(.never)
             .onChange(of: selectedIndex, initial: true) { _, index in
                 guard items.indices.contains(index) else { return }
-                proxy.scrollTo(items[index].id, anchor: nil)
+                withAnimation(.easeOut(duration: 0.15)) { proxy.scrollTo(items[index].id, anchor: .center) }
             }
         }
     }
@@ -82,7 +83,7 @@ struct ThumbnailCell: View {
                     .padding(6)
             }
         }
-        .frame(height: 84)
+        .frame(height: 92)
         .frame(maxWidth: .infinity)
         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         .overlay(
@@ -99,11 +100,13 @@ struct ThumbnailCell: View {
         }
     }
 
-    static let size = CGSize(width: 280, height: 168)
+    static let size = CGSize(width: 300, height: 190)
 }
 
 struct MediaPreview: View {
     let item: MediaItem?
+    var position: Int = 0
+    var total: Int = 0
     @State private var image: NSImage?
     @State private var details = ""
 
@@ -128,24 +131,26 @@ struct MediaPreview: View {
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .padding(16)
-                Rectangle().fill(Theme.separator).frame(height: 1)
+                .padding(.horizontal, 16)
+                .padding(.top, 12)
+                .padding(.bottom, 8)
                 HStack(spacing: 6) {
-                    Text(item.filename).font(.system(size: 11.5, weight: .semibold)).foregroundStyle(Theme.textSecondary).lineLimit(1)
+                    Text(item.filename).font(.system(size: 12, weight: .semibold)).foregroundStyle(Theme.textPrimary).lineLimit(1).truncationMode(.middle)
                     Text("·")
                     Text(details).lineLimit(1)
                     Spacer()
-                    Text(item.folderName)
+                    if total > 0 { Text("\(position) of \(total)").monospacedDigit(); Text("·") }
+                    Label(item.folderName, systemImage: "folder")
                 }
                 .font(Theme.caption)
                 .foregroundStyle(Theme.textTertiary)
                 .padding(.horizontal, 16)
-                .frame(height: 30)
+                .frame(height: 26)
             }
             .task(id: item.url) {
                 image = nil
                 details = MediaInfo.quickDescription(for: item)
-                image = await ThumbnailCache.shared.thumbnail(for: item.url, size: CGSize(width: 880, height: 600))
+                image = await ThumbnailCache.shared.thumbnail(for: item.url, size: CGSize(width: 1460, height: 900))
                 details = await MediaInfo.description(for: item)
             }
         } else {

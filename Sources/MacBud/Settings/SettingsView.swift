@@ -7,12 +7,14 @@ struct SettingsView: View {
     var body: some View {
         TabView {
             Tab("General", systemImage: "gearshape") { GeneralSettings(settings: app.settings, hotKeys: app.hotKeys) }
+            Tab("Shortcuts", systemImage: "keyboard") { ShortcutsSettings(settings: app.settings, hotKeys: app.hotKeys) }
             Tab("Clipboard", systemImage: "doc.on.clipboard") { ClipboardSettings(settings: app.settings, store: app.clipboardStore) }
             Tab("Snippets", systemImage: "text.badge.checkmark") { SnippetsSettings(store: app.snippetStore) }
             Tab("Screenshots", systemImage: "photo.on.rectangle.angled") { ScreenshotSettings(settings: app.settings, library: app.library) }
+            Tab("Dictation", systemImage: "mic") { DictationSettings(settings: app.settings) }
             Tab("About", systemImage: "info.circle") { AboutView() }
         }
-        .frame(width: 580, height: 460)
+        .frame(width: 640, height: 520)
     }
 }
 
@@ -26,31 +28,24 @@ struct GeneralSettings: View {
 
     var body: some View {
         Form {
-            SwiftUI.Section("Shortcuts") {
-                LabeledContent("Open MacBud") {
-                    HotKeyRecorder(hotKey: $settings.toggleHotKey, onRecordingChanged: suspendHotKeys)
-                }
-                ForEach(Section.allCases) { section in
-                    LabeledContent("Open \(section.title)") {
-                        HotKeyRecorder(hotKey: sectionBinding(section), onRecordingChanged: suspendHotKeys)
-                    }
-                }
-                if let problem = hotKeys?.toggleProblem {
-                    Label(problem, systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange).font(.callout)
-                }
-            }
             SwiftUI.Section("Behaviour") {
                 Picker("Return key", selection: $settings.enterAction) {
                     ForEach(AppSettings.EnterAction.allCases, id: \.self) { Text($0.title).tag($0) }
                 }
                 Text("⌘↩ always does the other one.").font(.caption).foregroundStyle(.secondary)
                 Toggle("Reopen the last used section", isOn: $settings.rememberLastSection)
+                Toggle("Show a clickable tab with an icon beside the notch", isOn: $settings.showNotchTab)
                 Toggle("Show a confirmation in the notch after copying", isOn: $settings.showToasts)
                 Toggle("Launch at login", isOn: $launchAtLogin)
                     .onChange(of: launchAtLogin) { _, on in
                         settings.launchAtLogin = on
+                        settings.hasConfiguredLaunchAtLogin = true
                         launchAtLogin = settings.launchAtLogin
                     }
+                if !AppDelegate.isInstalledInApplications {
+                    Text("Move MacBud to /Applications so the login item keeps working after rebuilds.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
             }
             SwiftUI.Section("Permissions") {
                 LabeledContent("Accessibility") {
@@ -88,18 +83,6 @@ struct GeneralSettings: View {
         }
     }
 
-    private func sectionBinding(_ section: Section) -> Binding<HotKey?> {
-        Binding(get: { settings.sectionHotKeys[section] },
-                set: { newValue in
-                    var keys = settings.sectionHotKeys
-                    if let newValue { keys[section] = newValue } else { keys.removeValue(forKey: section) }
-                    settings.sectionHotKeys = keys
-                })
-    }
-
-    private func suspendHotKeys(_ recording: Bool) {
-        if recording { HotKeyCenter.shared.unregisterAll() } else { hotKeys?.apply() }
-    }
 }
 
 struct StatusDot: View {
@@ -111,6 +94,9 @@ struct StatusDot: View {
 struct HotKeyRecorder: View {
     @Binding var hotKey: HotKey?
     var onRecordingChanged: (Bool) -> Void = { _ in }
+    /// Global shortcuts need ⌘/⌥/⌃ so plain typing can't be captured; island bindings may be bare keys.
+    var requiresModifier = true
+    var compact = false
     @State private var recording = false
 
     var body: some View {
@@ -118,9 +104,9 @@ struct HotKeyRecorder: View {
             Button {
                 recording.toggle()
             } label: {
-                Text(recording ? "Press shortcut…" : hotKey?.displayString ?? "Not set")
+                Text(recording ? (compact ? "Press…" : "Press shortcut…") : hotKey?.displayString ?? (compact ? "＋" : "Not set"))
                     .font(.system(size: 12, weight: .medium, design: .rounded))
-                    .frame(minWidth: 110)
+                    .frame(minWidth: compact ? 58 : 110)
             }
             .buttonStyle(.bordered)
             .tint(recording ? .accentColor : nil)
@@ -139,7 +125,7 @@ struct HotKeyRecorder: View {
         if event.keyCode == 53 { recording = false; return }
         if event.keyCode == 51, mods.isEmpty { hotKey = nil; recording = false; return }
         let candidate = HotKey(keyCode: event.keyCode, modifiers: mods)
-        guard candidate.isUsableGlobally else { NSSound.beep(); return }
+        guard !requiresModifier || candidate.isUsableGlobally else { NSSound.beep(); return }
         hotKey = candidate
         recording = false
     }

@@ -1,4 +1,5 @@
 import AppKit
+import SwiftUI
 import Observation
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
@@ -17,7 +18,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         notch.keyHandler = { [coordinator] event in coordinator!.handle(event: event) }
         notch.willOpen = { [coordinator] in coordinator!.willOpen() }
         notch.contentProvider = { [coordinator] in IslandContentView(state: coordinator!.state, coordinator: coordinator!) }
+        notch.dictationProvider = { [coordinator, settings] in
+            AnyView(DictationView(controller: coordinator!.dictation, settings: settings, notchHeight: coordinator!.state.geometry.notchRect.height))
+        }
+        notch.didClose = { [coordinator] in coordinator!.didClose() }
+        notch.state.showsNotchTab = settings.showNotchTab
+        notch.state.notchStatusSymbol = settings.clipboardPaused ? "pause.fill" : nil
         notch.install()
+        configureLaunchAtLoginIfNeeded()
 
         clipboardStore.limit = settings.historyLimit
         Task {
@@ -69,15 +77,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             _ = settings.historyLimit
             _ = settings.toggleHotKey
             _ = settings.sectionHotKeys
+            _ = settings.dictationHotKey
+            _ = settings.keyBindings
+            _ = settings.showNotchTab
+            _ = settings.clipboardPaused
         } onChange: {
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 applyLibrarySettings()
                 clipboardStore.limit = settings.historyLimit
                 hotKeys.apply()
+                notch.state.showsNotchTab = settings.showNotchTab
+                notch.state.notchStatusSymbol = settings.clipboardPaused ? "pause.fill" : nil
+                notch.applyBaseFrame(phase: notch.state.basePhase)
                 observeSettings()
-        Automation.installListener(app: self)
             }
         }
+    }
+
+    // MARK: Launch at login
+
+    /// Like Raycast, MacBud should simply be there after login. Enabled once, the first time the app runs
+    /// from an Applications folder (a build directory would leave a dangling login item).
+    private func configureLaunchAtLoginIfNeeded() {
+        guard !settings.hasConfiguredLaunchAtLogin, Self.isInstalledInApplications else { return }
+        settings.launchAtLogin = true
+        settings.hasConfiguredLaunchAtLogin = true
+        Log.app.info("launch at login enabled on first run: \(self.settings.launchAtLogin)")
+    }
+
+    static var isInstalledInApplications: Bool {
+        let path = Bundle.main.bundleURL.path
+        return path.hasPrefix("/Applications/") || path.hasPrefix(NSHomeDirectory() + "/Applications/")
     }
 }

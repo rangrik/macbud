@@ -12,6 +12,8 @@ final class NotchController {
     private var panelHost: NSHostingView<NotchRootView>?
     /// Builds the island body. Set before `install()`.
     var contentProvider: (() -> IslandContentView)?
+    /// Builds the dictation pill body. Set before `install()`.
+    var dictationProvider: (() -> AnyView)?
     private var baseHost: NSHostingView<NotchBaseView>?
     private var collapseTask: Task<Void, Never>?
     private var toastTask: Task<Void, Never>?
@@ -39,7 +41,7 @@ final class NotchController {
     }
 
     func install() {
-        let panelHost = NSHostingView(rootView: NotchRootView(state: state, controller: self, content: contentProvider))
+        let panelHost = NSHostingView(rootView: NotchRootView(state: state, controller: self, content: contentProvider, dictation: dictationProvider))
         panelHost.sizingOptions = []
         panel.contentView = panelHost
         panel.keyHandler = { [weak self] event in self?.keyHandler?(event) ?? false }
@@ -71,7 +73,30 @@ final class NotchController {
     // MARK: - Open / close
 
     func toggle(section: Section? = nil) {
-        if state.isExpanded, section == nil || section == state.section { close() } else { open(section: section) }
+        if state.isOpen, section == nil || section == state.section { close() } else { open(section: section) }
+    }
+
+    /// Shows the compact dictation pill (from collapsed, or shrinking down from the island).
+    func openDictation() {
+        refreshGeometry()
+        collapseTask?.cancel()
+        toastTask?.cancel()
+        state.toast = nil
+        state.basePhase = .idle
+        applyBaseFrame()
+        state.wantsSearchFocus = false
+        state.footerHint = nil
+        // Animate inside the larger frame, then shrink the window so the desktop around the pill stays clickable.
+        panel.setFrame(state.metrics.expandedWindowFrame(for: state.geometry), display: false)
+        panel.orderFrontRegardless()
+        panel.makeKey()
+        withAnimation(Self.openAnimation) { state.phase = .dictation }
+        collapseTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(420))
+            guard !Task.isCancelled, let self, self.state.isDictating else { return }
+            self.panel.setFrame(self.state.metrics.dictationWindowFrame(for: self.state.geometry), display: true)
+        }
+        Trace.log("openDictation key=\(panel.isKeyWindow)")
     }
 
     func open(section: Section? = nil) {
@@ -96,13 +121,13 @@ final class NotchController {
     }
 
     func close() {
-        guard state.isExpanded else { return }
+        guard state.isOpen else { return }
         state.wantsSearchFocus = false
         withAnimation(Self.closeAnimation) { state.phase = .collapsed }
         collapseTask?.cancel()
         collapseTask = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(280))
-            guard !Task.isCancelled, let self, !self.state.isExpanded else { return }
+            guard !Task.isCancelled, let self, !self.state.isOpen else { return }
             self.panel.orderOut(nil)
         }
         didClose?()
@@ -141,14 +166,18 @@ final class NotchController {
         state.geometry = g
         base.ignoresMouseEvents = !g.hasPhysicalNotch
         if state.isExpanded { panel.setFrame(state.metrics.expandedWindowFrame(for: g), display: true) }
+        if state.isDictating { panel.setFrame(state.metrics.dictationWindowFrame(for: g), display: true) }
         applyBaseFrame(phase: state.basePhase)
     }
 
-    private func applyBaseFrame(phase: BasePhase = .idle) {
+    /// Whether the idle base window shows the wider clickable tab (only meaningful on a real notch).
+    var showsTab: Bool { state.showsNotchTab && state.geometry.hasPhysicalNotch }
+
+    func applyBaseFrame(phase: BasePhase = .idle) {
         let g = state.geometry
         let frame: CGRect
         switch phase {
-        case .idle: frame = state.metrics.collapsedWindowFrame(for: g)
+        case .idle: frame = state.metrics.collapsedWindowFrame(for: g, tab: showsTab)
         case .toast:
             let s = state.metrics.toastSize
             let w = s.width + state.metrics.topFillet * 2
@@ -161,7 +190,7 @@ final class NotchController {
     private func panelDidResignKey() {
         // Clicking anywhere else (or another app grabbing focus) dismisses the island.
         Trace.log("panel resigned key; expanded=\(state.isExpanded) frontmost=\(NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "-") active=\(NSApp.isActive)")
-        if state.isExpanded, !isSnapshotting { close() }
+        if state.isOpen, !isSnapshotting { close() }
     }
 
     // MARK: - Automation support
@@ -172,7 +201,7 @@ final class NotchController {
         let size = (window == .panel ? panel : base).frame.size
         let backdrop = Color(red: 0.55, green: 0.60, blue: 0.70)
         let content: AnyView = switch window {
-        case .panel: AnyView(NotchRootView(state: state, controller: self, content: contentProvider))
+        case .panel: AnyView(NotchRootView(state: state, controller: self, content: contentProvider, dictation: dictationProvider))
         case .base: AnyView(NotchBaseView(state: state, controller: self))
         }
         let renderer = ImageRenderer(content: content.frame(width: size.width, height: size.height).background(backdrop)
@@ -181,7 +210,7 @@ final class NotchController {
         isSnapshotting = true
         defer {
             isSnapshotting = false
-            if state.isExpanded, !panel.isKeyWindow { panel.makeKey() }
+            if state.isOpen, !panel.isKeyWindow { panel.makeKey() }
         }
         guard let cg = renderer.cgImage else { throw CocoaError(.fileWriteUnknown) }
         let rep = NSBitmapImageRep(cgImage: cg)
@@ -208,6 +237,7 @@ final class NotchBaseWindow: NSWindow {
         isReleasedWhenClosed = false
         animationBehavior = .none
         isExcludedFromWindowsMenu = true
+        acceptsMouseMovedEvents = true
     }
 
     override var canBecomeKey: Bool { false }

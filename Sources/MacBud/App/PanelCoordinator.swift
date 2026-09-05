@@ -14,6 +14,7 @@ final class PanelCoordinator {
     let clipboard: ClipboardSectionController
     let snippets: SnippetsSectionController
     let screenshots: ScreenshotsSectionController
+    let dictation: DictationController
     /// Set by the app once hotkeys are bound; used by the welcome screen and footer.
     var hotKeys: HotKeyBinder?
 
@@ -29,7 +30,9 @@ final class PanelCoordinator {
         clipboard = ClipboardSectionController(store: clipboardStore, context: context)
         snippets = SnippetsSectionController(store: snippetStore, clipboard: clipboardStore, context: context)
         screenshots = ScreenshotsSectionController(library: library, context: context)
+        dictation = DictationController(settings: settings, context: context, clipboard: clipboardStore)
         clipboard.snippets = snippets
+        dictation.onDidEnd = { [weak self] in self?.notch.close() }
     }
 
     var showsWelcome: Bool { !settings.hasSeenWelcome }
@@ -50,7 +53,24 @@ final class PanelCoordinator {
     }
 
     func toggle() {
-        if state.isExpanded { notch.close() } else { open() }
+        if state.isOpen { notch.close() } else { open() }
+    }
+
+    /// Global dictation hotkey: start recording; pressing it again while recording delivers the text.
+    func startDictation() {
+        if state.isDictating {
+            if dictation.phase == .recording { dictation.finish(paste: settings.enterAction == .paste) }
+            return
+        }
+        frontmost.capture()
+        context.clearHint()
+        notch.openDictation()
+        dictation.start()
+    }
+
+    /// Called by the notch controller whenever the island collapses, for any reason.
+    func didClose() {
+        if dictation.isActive { dictation.cancel() }
     }
 
     /// Called by the notch controller right before the island appears.
@@ -90,12 +110,23 @@ final class PanelCoordinator {
     // MARK: Key handling
 
     func handle(event: NSEvent) -> Bool {
-        guard let command = KeyRouter.command(for: event) else { return false }
+        guard let command = KeyRouter.command(for: event, bindings: settings.keyBindings) else { return false }
         return handle(command)
     }
 
     @discardableResult
     func handle(_ command: PanelCommand) -> Bool {
+        if state.isDictating {
+            switch command {
+            case .close: dictation.cancel()
+            case .primaryAction:
+                if case .failed = dictation.phase { dictation.start() } else { dictation.finish(paste: context.wantsPaste(for: command)) }
+            case .secondaryAction: dictation.finish(paste: context.wantsPaste(for: command))
+            case .startDictation: dictation.finish(paste: settings.enterAction == .paste)
+            default: break
+            }
+            return true
+        }
         if showsWelcome {
             switch command {
             case .close: notch.close()
@@ -121,6 +152,10 @@ final class PanelCoordinator {
             if snippets.isEditing { return false }
             openSettings()
             return true
+        case .startDictation:
+            if snippets.isEditing { return false }
+            startDictation()
+            return true
         default:
             return activeHandle(command)
         }
@@ -142,30 +177,45 @@ final class PanelCoordinator {
 
     // MARK: Footer
 
-    struct Hint: Identifiable { let keys: String; let label: String; var id: String { keys } }
+    /// A footer hint. Clicking it runs the command, so mouse users get the same actions.
+    struct Hint: Identifiable {
+        let keys: String
+        let label: String
+        let command: PanelCommand?
+        var id: String { keys + label }
+    }
+
+    /// Display string of the first chord bound to a command (reflects the user's custom bindings).
+    func keys(for command: BindableCommand) -> String {
+        settings.keyBindings.chords(for: command).first?.displayString ?? "—"
+    }
+
+    private func hint(_ command: BindableCommand, _ label: String) -> Hint {
+        Hint(keys: keys(for: command), label: label, command: command.panelCommand)
+    }
 
     func footerHints() -> [Hint] {
         let app = frontmost.previousAppName ?? "app"
         let enterCopies = settings.enterAction == .copy
-        let copyKeys = enterCopies ? "↩" : "⌘↩", pasteKeys = enterCopies ? "⌘↩" : "↩"
+        let copy: BindableCommand = enterCopies ? .primaryAction : .secondaryAction
+        let paste: BindableCommand = enterCopies ? .secondaryAction : .primaryAction
         var hints: [Hint] = []
         switch state.section {
         case .clipboard:
-            hints = [Hint(keys: copyKeys, label: "Copy"), Hint(keys: pasteKeys, label: "Paste to \(app)"),
-                     Hint(keys: "⌘P", label: clipboard.selected?.isPinned == true ? "Unpin" : "Pin"),
-                     Hint(keys: "⌘S", label: "Snippet"), Hint(keys: "⌘⌫", label: "Delete")]
+            hints = [hint(copy, "Copy"), hint(paste, "Paste to \(app)"),
+                     hint(.togglePin, clipboard.selected?.isPinned == true ? "Unpin" : "Pin"),
+                     hint(.saveAsSnippet, "Snippet"), hint(.delete, "Delete")]
         case .snippets:
             if snippets.isEditing {
-                hints = [Hint(keys: "⌘S", label: "Save"), Hint(keys: "⇥", label: "Next field"), Hint(keys: "esc", label: "Cancel")]
+                hints = [hint(.saveAsSnippet, "Save"), Hint(keys: "⇥", label: "Next field", command: nil), hint(.close, "Cancel")]
             } else {
-                hints = [Hint(keys: copyKeys, label: "Copy"), Hint(keys: pasteKeys, label: "Paste to \(app)"),
-                         Hint(keys: "⌘N", label: "New"), Hint(keys: "⌘E", label: "Edit"), Hint(keys: "⌘⌫", label: "Delete")]
+                hints = [hint(copy, "Copy"), hint(paste, "Paste to \(app)"), hint(.newItem, "New"), hint(.editItem, "Edit"), hint(.delete, "Delete")]
             }
         case .screenshots:
-            hints = [Hint(keys: copyKeys, label: "Copy"), Hint(keys: pasteKeys, label: "Paste to \(app)"),
-                     Hint(keys: "⌘Y", label: "Quick Look"), Hint(keys: "⌘R", label: "Finder"), Hint(keys: "⌘⌫", label: "Trash")]
+            hints = [hint(copy, "Copy"), hint(paste, "Paste to \(app)"), hint(.quickLook, "Quick Look"),
+                     hint(.revealInFinder, "Finder"), hint(.delete, "Trash")]
         }
-        if !snippets.isEditing { hints.append(Hint(keys: "⇥", label: "Section")) }
+        if !snippets.isEditing { hints.append(hint(.nextSection, "Section")) }
         return hints
     }
 
@@ -173,7 +223,8 @@ final class PanelCoordinator {
 
     func dump() -> [String: Any] {
         var d: [String: Any] = [
-            "phase": state.isExpanded ? "expanded" : "collapsed",
+            "phase": state.isDictating ? "dictation" : state.isExpanded ? "expanded" : "collapsed",
+            "dictation": ["phase": String(describing: dictation.phase), "transcript": dictation.transcript],
             "section": state.section.rawValue,
             "query": state.query,
             "footerHint": state.footerHint ?? "",
@@ -234,6 +285,10 @@ final class HotKeyBinder {
         for (section, hotKey) in settings.sectionHotKeys {
             do { try center.register(hotKey) { [weak self] in self?.coordinator.open(section: section) } }
             catch { Log.input.error("section hotkey \(section.rawValue) failed: \(error.localizedDescription)") }
+        }
+        if let hotKey = settings.dictationHotKey {
+            do { try center.register(hotKey) { [weak self] in self?.coordinator.startDictation() } }
+            catch { Log.input.error("dictation hotkey failed: \(error.localizedDescription)") }
         }
     }
 }

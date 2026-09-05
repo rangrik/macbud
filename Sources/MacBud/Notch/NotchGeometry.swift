@@ -41,6 +41,10 @@ nonisolated struct NotchGeometry: Equatable, Sendable {
 nonisolated struct NotchMetrics: Equatable, Sendable {
     var islandSize = CGSize(width: 760, height: 500)
     var toastSize = CGSize(width: 300, height: 76)
+    var dictationSize = CGSize(width: 560, height: 132)
+    /// How far the idle tab extends beyond the notch on each side.
+    var tabExtension: CGFloat = 30
+    var dictationBottomRadius: CGFloat = 26
     /// Concave flare at the two top corners where the island meets the screen edge.
     var topFillet: CGFloat = 10
     var bottomRadius: CGFloat = 28
@@ -53,5 +57,12 @@ nonisolated struct NotchMetrics: Equatable, Sendable {
         return CGRect(x: g.notchCenterX - w / 2, y: g.topY - islandSize.height, width: w, height: islandSize.height)
     }
 
-    func collapsedWindowFrame(for g: NotchGeometry) -> CGRect { g.notchRect }
+    func dictationWindowFrame(for g: NotchGeometry) -> CGRect {
+        let w = dictationSize.width + topFillet * 2
+        return CGRect(x: g.notchCenterX - w / 2, y: g.topY - dictationSize.height, width: w, height: dictationSize.height)
+    }
+
+    func collapsedWindowFrame(for g: NotchGeometry, tab: Bool) -> CGRect {
+        tab ? g.notchRect.insetBy(dx: -tabExtension, dy: 0) : g.notchRect
+    }
 }

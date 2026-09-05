@@ -35,4 +35,18 @@ import Testing
         #expect(KeyRouter.command(for: event("p", code: 35)) == nil)
         #expect(KeyRouter.command(for: event(" ", code: 49)) == nil)
     }
+
+    @Test func customBindingsOverrideDefaults() {
+        var bindings = KeyBindings.defaults
+        bindings.set([HotKey(keyCode: 38, modifiers: [])], for: .moveDown) // plain J
+        #expect(KeyRouter.command(for: event("j", code: 38), bindings: bindings) == .moveDown)
+        #expect(KeyRouter.command(for: event("", code: 125), bindings: bindings) == nil, "old chord is gone")
+        #expect(bindings.conflicts(for: HotKey(keyCode: 53, modifiers: []), excluding: .moveUp) == [.close])
+    }
+
+    @Test func bindingsRoundTripThroughJSON() throws {
+        let data = try JSONEncoder().encode(KeyBindings.defaults)
+        let decoded = try JSONDecoder().decode(KeyBindings.self, from: data)
+        #expect(decoded == KeyBindings.defaults)
+    }
 }

@@ -24,7 +24,7 @@ nonisolated enum Section: String, CaseIterable, Codable, Identifiable, Sendable 
     var previous: Section { Section.allCases[(index + Section.allCases.count - 1) % Section.allCases.count] }
 }
 
-nonisolated enum NotchPhase: Equatable, Sendable { case collapsed, expanded }
+nonisolated enum NotchPhase: Equatable, Sendable { case collapsed, expanded, dictation }
 nonisolated enum BasePhase: Equatable, Sendable { case idle, toast }
 
 struct Toast: Equatable, Sendable {
@@ -48,8 +48,15 @@ final class NotchState {
     var wantsSearchFocus = false
     /// A transient hint shown in the footer (e.g. "press ⌘⇧⌫ again to clear").
     var footerHint: String?
+    /// Draw a clickable tab with an icon beside the idle notch.
+    var showsNotchTab = true
+    /// Small status glyph shown in the idle tab (e.g. "pause.fill" while capture is paused).
+    var notchStatusSymbol: String?
+    var tabHovered = false
 
     init(geometry: NotchGeometry) { self.geometry = geometry }
 
     var isExpanded: Bool { phase == .expanded }
+    var isDictating: Bool { phase == .dictation }
+    var isOpen: Bool { phase != .collapsed }
 }

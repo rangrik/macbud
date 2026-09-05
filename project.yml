@@ -41,6 +41,8 @@ targets:
         NSDesktopFolderUsageDescription: "MacBud reads screenshots saved to your Desktop so you can browse and copy them."
         NSDocumentsFolderUsageDescription: "MacBud reads screenshots from folders you configure."
         NSDownloadsFolderUsageDescription: "MacBud reads screenshots from folders you configure."
+        NSMicrophoneUsageDescription: "MacBud listens while you dictate so it can turn your speech into text."
+        NSSpeechRecognitionUsageDescription: "MacBud transcribes your dictation on this Mac."
         CFBundleURLTypes:
           - CFBundleURLName: com.rangrik.macbud
             CFBundleURLSchemes: [macbud]

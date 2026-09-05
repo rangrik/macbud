@@ -49,5 +49,9 @@
 	<string>MacBud reads screenshots from folders you configure.</string>
 	<key>NSHumanReadableCopyright</key>
 	<string>© 2026 rangrik</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>MacBud listens while you dictate so it can turn your speech into text.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>MacBud transcribes your dictation on this Mac.</string>
 </dict>
 </plist>
