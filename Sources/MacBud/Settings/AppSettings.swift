@@ -1,0 +1,94 @@
+import AppKit
+import ServiceManagement
+
+/// User preferences, persisted in UserDefaults. Observable so views update live.
+@Observable
+final class AppSettings {
+    enum EnterAction: String, Codable, CaseIterable, Sendable {
+        case copy, paste
+        var title: String { self == .copy ? "Copy to clipboard" : "Paste into the active app" }
+    }
+
+    @ObservationIgnored private let defaults: UserDefaults
+    @ObservationIgnored private var isLoading = true
+
+    var historyLimit: Int = 500 { didSet { set(historyLimit, "historyLimit") } }
+    var enterAction: EnterAction = .copy { didSet { set(enterAction.rawValue, "enterAction") } }
+    var showToasts = true { didSet { set(showToasts, "showToasts") } }
+    var ignoredBundleIDs: [String] = AppSettings.defaultIgnoredBundleIDs { didSet { set(ignoredBundleIDs, "ignoredBundleIDs") } }
+    var screenshotFolders: [String] = [] { didSet { set(screenshotFolders, "screenshotFolders") } }
+    var includeSubfolders = false { didSet { set(includeSubfolders, "includeSubfolders") } }
+    var includeVideos = true { didSet { set(includeVideos, "includeVideos") } }
+    var toggleHotKey: HotKey? = .defaultToggle { didSet { setCodable(toggleHotKey, "toggleHotKey") } }
+    var sectionHotKeys: [Section: HotKey] = [:] { didSet { setCodable(sectionHotKeys, "sectionHotKeys") } }
+    var rememberLastSection = true { didSet { set(rememberLastSection, "rememberLastSection") } }
+    var lastSection: Section = .clipboard { didSet { set(lastSection.rawValue, "lastSection") } }
+    var hasSeenWelcome = false { didSet { set(hasSeenWelcome, "hasSeenWelcome") } }
+    var clipboardPaused = false { didSet { set(clipboardPaused, "clipboardPaused") } }
+
+    static let defaultIgnoredBundleIDs = [
+        "com.1password.1password", "com.agilebits.onepassword7", "com.agilebits.onepassword-osx",
+        "com.apple.keychainaccess", "com.bitwarden.desktop", "com.apple.Passwords",
+    ]
+
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+        historyLimit = defaults.object(forKey: "historyLimit") as? Int ?? 500
+        enterAction = (defaults.string(forKey: "enterAction")).flatMap(EnterAction.init(rawValue:)) ?? .copy
+        showToasts = defaults.object(forKey: "showToasts") as? Bool ?? true
+        ignoredBundleIDs = defaults.stringArray(forKey: "ignoredBundleIDs") ?? Self.defaultIgnoredBundleIDs
+        screenshotFolders = defaults.stringArray(forKey: "screenshotFolders") ?? [Self.systemScreenshotFolder().path]
+        includeSubfolders = defaults.bool(forKey: "includeSubfolders")
+        includeVideos = defaults.object(forKey: "includeVideos") as? Bool ?? true
+        toggleHotKey = defaults.object(forKey: "toggleHotKey") == nil ? .defaultToggle : codable(HotKey.self, "toggleHotKey")
+        sectionHotKeys = codable([Section: HotKey].self, "sectionHotKeys") ?? [:]
+        rememberLastSection = defaults.object(forKey: "rememberLastSection") as? Bool ?? true
+        lastSection = defaults.string(forKey: "lastSection").flatMap(Section.init(rawValue:)) ?? .clipboard
+        hasSeenWelcome = defaults.bool(forKey: "hasSeenWelcome")
+        clipboardPaused = defaults.bool(forKey: "clipboardPaused")
+        isLoading = false
+    }
+
+    var screenshotFolderURLs: [URL] { screenshotFolders.map { URL(fileURLWithPath: ($0 as NSString).expandingTildeInPath, isDirectory: true) } }
+
+    // MARK: Launch at login (SMAppService)
+
+    var launchAtLogin: Bool {
+        get { SMAppService.mainApp.status == .enabled }
+        set {
+            do {
+                if newValue { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() }
+            } catch {
+                Log.app.error("launch at login change failed: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    /// Where macOS itself saves screenshots (`defaults read com.apple.screencapture location`), else ~/Desktop.
+    static func systemScreenshotFolder() -> URL {
+        if let custom = UserDefaults(suiteName: "com.apple.screencapture")?.string(forKey: "location") {
+            let url = URL(fileURLWithPath: (custom as NSString).expandingTildeInPath, isDirectory: true)
+            if FileManager.default.fileExists(atPath: url.path) { return url }
+        }
+        return FileManager.default.urls(for: .desktopDirectory, in: .userDomainMask).first
+            ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Desktop")
+    }
+
+    // MARK: Persistence helpers
+
+    private func set(_ value: Any?, _ key: String) {
+        guard !isLoading else { return }
+        defaults.set(value, forKey: key)
+    }
+
+    private func setCodable<T: Encodable>(_ value: T?, _ key: String) {
+        guard !isLoading else { return }
+        if let value, let data = try? JSONEncoder().encode(value) { defaults.set(data, forKey: key) }
+        else { defaults.set(Data(), forKey: key) }
+    }
+
+    private func codable<T: Decodable>(_ type: T.Type, _ key: String) -> T? {
+        guard let data = defaults.data(forKey: key), !data.isEmpty else { return nil }
+        return try? JSONDecoder().decode(T.self, from: data)
+    }
+}
