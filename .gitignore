@@ -1,0 +1,18 @@
+# Xcode / SwiftPM
+build/
+DerivedData/
+*.xcodeproj/
+!project.yml
+*.xcworkspace/
+xcuserdata/
+.build/
+.swiftpm/
+*.hmap
+*.ipa
+*.dSYM.zip
+*.dSYM
+# macOS
+.DS_Store
+# Editors
+.idea/
+.vscode/
