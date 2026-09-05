@@ -192,6 +192,8 @@ final class NotchController {
         }
         base.setFrame(frame, display: true)
         base.ignoresMouseEvents = !g.hasPhysicalNotch
+        let grow = phase == .idle && showsTab ? state.metrics.tabHoverGrowth : .zero
+        baseHost?.hitInsets = NSEdgeInsets(top: 0, left: grow.width, bottom: grow.height, right: grow.width)
     }
 
     private func panelDidResignKey() {
@@ -258,27 +260,51 @@ final class NotchBaseWindow: NSWindow {
 final class ClickableHostingView<Content: View>: NSHostingView<Content> {
     var onClick: (() -> Void)?
     var onHoverChange: ((Bool) -> Void)?
+    /// Transparent margin around the drawn tab (top-down semantics); clicks and hover ignore it until hovered.
+    var hitInsets = NSEdgeInsets() { didSet { window?.invalidateCursorRects(for: self) } }
     private var pressed = false
+    private var hovering = false
     private var tracking: NSTrackingArea?
 
-    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
-    override func hitTest(_ point: NSPoint) -> NSView? { bounds.contains(convert(point, from: superview)) ? self : nil }
+    /// The drawn tab; the whole bounds while hovered so the grown edge does not flicker.
+    private var activeRect: NSRect {
+        if hovering { return bounds }
+        var r = bounds
+        r.origin.x += hitInsets.left
+        r.size.width -= hitInsets.left + hitInsets.right
+        r.size.height -= hitInsets.bottom
+        if !isFlipped { r.origin.y += hitInsets.bottom }
+        return r
+    }
 
-    override func mouseDown(with event: NSEvent) { pressed = true }
+    private func contains(_ event: NSEvent) -> Bool { activeRect.contains(convert(event.locationInWindow, from: nil)) }
+
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+    override func hitTest(_ point: NSPoint) -> NSView? { activeRect.contains(convert(point, from: superview)) ? self : nil }
+
+    override func mouseDown(with event: NSEvent) { pressed = contains(event) }
 
     override func mouseUp(with event: NSEvent) {
         defer { pressed = false }
-        guard pressed, bounds.contains(convert(event.locationInWindow, from: nil)) else { return }
+        guard pressed, contains(event) else { return }
         onClick?()
     }
 
-    override func mouseEntered(with event: NSEvent) { onHoverChange?(true) }
-    override func mouseExited(with event: NSEvent) { onHoverChange?(false) }
+    override func mouseEntered(with event: NSEvent) { setHovering(contains(event)) }
+    override func mouseMoved(with event: NSEvent) { setHovering(contains(event)) }
+    override func mouseExited(with event: NSEvent) { setHovering(false) }
+
+    private func setHovering(_ now: Bool) {
+        guard now != hovering else { return }
+        hovering = now
+        Trace.log("tab hover=\(now)")
+        onHoverChange?(now)
+    }
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
         if let tracking { removeTrackingArea(tracking) }
-        let area = NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self)
+        let area = NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .mouseMoved, .activeAlways, .inVisibleRect], owner: self)
         addTrackingArea(area)
         tracking = area
     }

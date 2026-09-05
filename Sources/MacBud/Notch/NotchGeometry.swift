@@ -42,8 +42,10 @@ nonisolated struct NotchMetrics: Equatable, Sendable {
     var islandSize = CGSize(width: 760, height: 500)
     var toastSize = CGSize(width: 300, height: 76)
     var dictationSize = CGSize(width: 560, height: 132)
-    /// How far the idle tab extends beyond the notch on each side.
-    var tabExtension: CGFloat = 30
+    /// How far the idle tab extends beyond the notch on each side (icon plus comfortable padding).
+    var tabExtension: CGFloat = 42
+    /// How much the whole tab grows on hover: per side horizontally, and downwards.
+    var tabHoverGrowth = CGSize(width: 6, height: 4)
     var dictationBottomRadius: CGFloat = 26
     /// Concave flare at the two top corners where the island meets the screen edge.
     var topFillet: CGFloat = 10
@@ -62,7 +64,17 @@ nonisolated struct NotchMetrics: Equatable, Sendable {
         return CGRect(x: g.notchCenterX - w / 2, y: g.topY - dictationSize.height, width: w, height: dictationSize.height)
     }
 
+    /// The base window's idle frame. With the tab it is padded by `tabHoverGrowth` so the tab can
+    /// grow on hover without the window changing size; the padding is transparent and not clickable.
     func collapsedWindowFrame(for g: NotchGeometry, tab: Bool) -> CGRect {
-        tab ? g.notchRect.insetBy(dx: -tabExtension, dy: 0) : g.notchRect
+        guard tab else { return g.notchRect }
+        let r = g.notchRect.insetBy(dx: -(tabExtension + tabHoverGrowth.width), dy: 0)
+        return CGRect(x: r.minX, y: r.minY - tabHoverGrowth.height, width: r.width, height: r.height + tabHoverGrowth.height)
+    }
+
+    /// Size of the drawn tab (idle or hovered) inside the frame above.
+    func tabSize(for g: NotchGeometry, hovered: Bool) -> CGSize {
+        let grow = hovered ? tabHoverGrowth : .zero
+        return CGSize(width: g.notchRect.width + (tabExtension + grow.width) * 2, height: g.notchRect.height + grow.height)
     }
 }

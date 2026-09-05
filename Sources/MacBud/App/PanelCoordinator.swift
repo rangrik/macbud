@@ -17,6 +17,8 @@ final class PanelCoordinator {
     let dictation: DictationController
     /// Set by the app once hotkeys are bound; used by the welcome screen and footer.
     var hotKeys: HotKeyBinder?
+    /// Whether Settings was already showing when the island opened (see `didClose`).
+    @ObservationIgnored private var settingsVisibleAtOpen = false
 
     init(state: NotchState, notch: NotchController, settings: AppSettings,
          clipboardStore: ClipboardStore, snippetStore: SnippetStore, library: ScreenshotLibrary) {
@@ -69,15 +71,38 @@ final class PanelCoordinator {
     }
 
     /// Called by the notch controller whenever the island collapses, for any reason.
+    ///
+    /// Also the moment Settings appears from the island (⌘, is handled by the app menu, which takes key
+    /// focus away from the panel). MacBud is a background app, so macOS may refuse to activate it and the
+    /// new window would sit behind the app the user was in; order it front regardless.
     func didClose() {
         if dictation.isActive { dictation.cancel() }
+        guard !settingsVisibleAtOpen else { return }
+        Task { @MainActor [weak self] in
+            for _ in 0..<15 {
+                if let self, let window = Self.settingsWindow {
+                    settingsVisibleAtOpen = true
+                    window.orderFrontRegardless()
+                    NSApp.activate()
+                    window.makeKey()
+                    Trace.log("settings window ordered front: \(window.title) active=\(NSApp.isActive)")
+                    return
+                }
+                try? await Task.sleep(for: .milliseconds(100))
+            }
+        }
     }
 
     /// Called by the notch controller right before the island appears.
     func willOpen() {
         frontmost.capture()
         context.clearHint()
+        settingsVisibleAtOpen = Self.settingsWindow != nil
         activeDidShow()
+    }
+
+    static var settingsWindow: NSWindow? {
+        NSApp.windows.first { $0.isVisible && $0.styleMask.contains(.titled) && !($0 is NotchPanel) && !($0 is NotchBaseWindow) }
     }
 
     func select(_ section: Section) {
@@ -169,28 +194,28 @@ final class PanelCoordinator {
         }
     }
 
-    /// Opens the Settings window in front of everything. MacBud is a background (LSUIElement) app, so
-    /// macOS may decline to activate it; ordering the window front regardless keeps it visible either way.
+    /// Opens the Settings window the same way the app menu's "Settings…" item does (the only path SwiftUI
+    /// reliably honours). When ⌘, itself is pressed in the island, the main menu handles it before the panel
+    /// sees the key; `AppDelegate` then brings the window to the front, since a background app may not
+    /// be allowed to activate itself.
     func openSettings() {
         notch.close()
         NSApp.activate()
-        NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
-        Task { @MainActor in
-            for _ in 0..<10 {
-                if let window = Self.settingsWindow {
-                    window.orderFrontRegardless()
-                    window.makeKey()
-                    NSApp.activate()
-                    return
-                }
-                try? await Task.sleep(for: .milliseconds(50))
-            }
-            Log.app.error("settings window did not appear")
+        if let (menu, index) = Self.settingsMenuItem {
+            menu.performActionForItem(at: index)
+        } else {
+            NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
         }
     }
 
-    static var settingsWindow: NSWindow? {
-        NSApp.windows.first { $0.isVisible && $0.styleMask.contains(.titled) && !($0 is NotchPanel) && !($0 is NotchBaseWindow) }
+    private static var settingsMenuItem: (NSMenu, Int)? {
+        for top in NSApp.mainMenu?.items ?? [] {
+            guard let menu = top.submenu else { continue }
+            if let index = menu.items.firstIndex(where: { $0.keyEquivalent == "," && $0.keyEquivalentModifierMask == .command }) {
+                return (menu, index)
+            }
+        }
+        return nil
     }
 
     // MARK: Footer

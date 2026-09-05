@@ -14,7 +14,10 @@ import Testing
             #expect(abs(frame.midX - 1028) < 0.01)
         }
         #expect(m.collapsedWindowFrame(for: geometry, tab: false) == geometry.notchRect)
-        #expect(m.collapsedWindowFrame(for: geometry, tab: true).width == 220 + m.tabExtension * 2)
+        #expect(m.collapsedWindowFrame(for: geometry, tab: true).width == 220 + (m.tabExtension + m.tabHoverGrowth.width) * 2)
+        #expect(m.collapsedWindowFrame(for: geometry, tab: true).height == 38 + m.tabHoverGrowth.height)
+        #expect(m.tabSize(for: geometry, hovered: false) == CGSize(width: 220 + m.tabExtension * 2, height: 38))
+        #expect(m.tabSize(for: geometry, hovered: true).width == 220 + (m.tabExtension + m.tabHoverGrowth.width) * 2)
         #expect(m.dictationWindowFrame(for: geometry).height == m.dictationSize.height)
     }
 

@@ -75,18 +75,22 @@ struct NotchBaseView: View {
         let g = state.geometry
         let toasting = state.basePhase == .toast
         let tab = controller.showsTab
+        let hovered = tab && !toasting && state.tabHovered
         let size: CGSize = toasting
             ? CGSize(width: m.toastSize.width + m.topFillet * 2, height: m.toastSize.height)
-            : (tab ? CGSize(width: g.notchRect.width + m.tabExtension * 2, height: g.notchRect.height) : g.notchRect.size)
+            : (tab ? m.tabSize(for: g, hovered: hovered) : g.notchRect.size)
         ZStack(alignment: .top) {
             IslandSilhouette(topFillet: toasting || tab ? min(m.topFillet, 8) : 0,
                              bottomRadius: toasting ? m.toastBottomRadius : m.collapsedBottomRadius)
                 .frame(width: size.width, height: size.height)
                 .opacity(toasting || g.hasPhysicalNotch ? 1 : 0)
+                .animation(.easeOut(duration: 0.18), value: hovered)
 
             if tab, !toasting {
-                NotchTabContent(state: state, notchWidth: g.notchRect.width, wing: m.tabExtension, height: g.notchRect.height)
+                NotchTabContent(state: state, notchWidth: g.notchRect.width,
+                                wing: m.tabExtension + (hovered ? m.tabHoverGrowth.width : 0), height: size.height)
                     .frame(width: size.width, height: size.height)
+                    .animation(.easeOut(duration: 0.18), value: hovered)
             }
 
             if let toast = state.toast {
@@ -115,7 +119,7 @@ struct NotchTabContent: View {
         let hovered = state.tabHovered
         HStack(spacing: 0) {
             Image(systemName: "rectangle.topthird.inset.filled")
-                .font(.system(size: 11, weight: .semibold))
+                .font(.system(size: hovered ? 12 : 11, weight: .semibold))
                 .foregroundStyle(.white.opacity(hovered ? 1 : 0.62))
                 .frame(width: wing, height: height)
             Spacer().frame(width: notchWidth)
@@ -124,8 +128,7 @@ struct NotchTabContent: View {
                 .foregroundStyle(state.notchStatusSymbol == nil ? .white.opacity(hovered ? 0.95 : 0.42) : Theme.warning)
                 .frame(width: wing, height: height)
         }
-        .scaleEffect(hovered ? 1.06 : 1, anchor: .top)
-        .animation(.easeOut(duration: 0.15), value: hovered)
+        .animation(.easeOut(duration: 0.18), value: hovered)
         .accessibilityLabel("MacBud")
         .accessibilityHint("Click to open MacBud")
     }
