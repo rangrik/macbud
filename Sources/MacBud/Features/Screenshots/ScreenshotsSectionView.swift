@@ -1,6 +1,9 @@
 import AVFoundation
 import SwiftUI
 
+/// Filmstrip layout: one large preview with its metadata on top, a horizontal strip of fixed-size
+/// thumbnails below. Recency is what matters for screenshots, so the newest item is first and the
+/// strip keeps the selection centred while `←/→` walk through it.
 struct ScreenshotsSectionView: View {
     @Bindable var controller: ScreenshotsSectionController
 
@@ -24,33 +27,34 @@ struct ScreenshotsSectionView: View {
                 Filmstrip(items: results, selectedIndex: controller.selectedIndex,
                           onSelect: { controller.selectedIndex = $0 },
                           onActivate: { controller.activate(results[$0].item, paste: controller.context.settings.enterAction == .paste) })
-                    .frame(height: 112)
+                    .frame(height: Filmstrip.height)
             }
         }
     }
 }
 
-/// Horizontal strip of thumbnails; ← → (or ↑ ↓) step through it, the selection stays centred.
 struct Filmstrip: View {
     let items: [Ranked<MediaItem>]
     let selectedIndex: Int
     let onSelect: (Int) -> Void
     let onActivate: (Int) -> Void
 
+    static let cellSize = CGSize(width: 150, height: 94)
+    static let height: CGFloat = cellSize.height + 24
+
     var body: some View {
         ScrollViewReader { proxy in
             ScrollView(.horizontal) {
                 LazyHStack(spacing: 10) {
                     ForEach(Array(items.enumerated()), id: \.element.id) { index, ranked in
-                        ThumbnailCell(item: ranked.item, isSelected: index == selectedIndex)
-                            .frame(width: 148)
+                        ThumbnailCell(item: ranked.item, isSelected: index == selectedIndex, size: Self.cellSize)
                             .onTapGesture(count: 2) { onActivate(index) }
                             .onTapGesture { onSelect(index) }
                             .id(ranked.id)
                     }
                 }
                 .padding(.horizontal, 16)
-                .padding(.vertical, 10)
+                .padding(.vertical, 12)
             }
             .scrollIndicators(.never)
             .onChange(of: selectedIndex, initial: true) { _, index in
@@ -64,13 +68,21 @@ struct Filmstrip: View {
 struct ThumbnailCell: View {
     let item: MediaItem
     let isSelected: Bool
+    let size: CGSize
     @State private var image: NSImage?
+    @State private var hovering = false
 
     var body: some View {
+        let shape = RoundedRectangle(cornerRadius: 8, style: .continuous)
         ZStack(alignment: .bottomLeading) {
-            RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Theme.chipFill)
+            shape.fill(Theme.chipFill)
             if let image {
-                Image(nsImage: image).resizable().interpolation(.high).aspectRatio(contentMode: .fill)
+                // Fill-and-crop inside a fixed frame; without the explicit frame + clip the image would
+                // size the cell and spill across its neighbours.
+                Image(nsImage: image).resizable().interpolation(.high)
+                    .aspectRatio(contentMode: .fill)
+                    .frame(width: size.width, height: size.height)
+                    .clipped()
             } else {
                 Image(systemName: item.kind == .video ? "film" : "photo").foregroundStyle(Theme.textTertiary)
             }
@@ -83,24 +95,27 @@ struct ThumbnailCell: View {
                     .padding(6)
             }
         }
-        .frame(height: 92)
-        .frame(maxWidth: .infinity)
-        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .strokeBorder(isSelected ? Theme.accent : .white.opacity(0.08), lineWidth: isSelected ? 2 : 1)
-        )
+        .frame(width: size.width, height: size.height)
+        .clipShape(shape)
+        .overlay(shape.strokeBorder(isSelected ? Theme.accent : .white.opacity(hovering ? 0.3 : 0.1), lineWidth: isSelected ? 2 : 1))
         .shadow(color: isSelected ? Theme.accent.opacity(0.35) : .clear, radius: 8)
+        .scaleEffect(isSelected ? 1 : hovering ? 0.99 : 0.96)
+        .opacity(isSelected || hovering ? 1 : 0.82)
+        .animation(.easeOut(duration: 0.14), value: isSelected)
+        .animation(.easeOut(duration: 0.14), value: hovering)
+        .contentShape(Rectangle())
+        .onHover { hovering = $0 }
+        .help(item.filename)
         .task(id: item.url) {
-            if let hit = ThumbnailCache.shared.cached(item.url, size: Self.size) {
+            if let hit = ThumbnailCache.shared.cached(item.url, size: Self.thumbnailPixels) {
                 image = hit
             } else {
-                image = await ThumbnailCache.shared.thumbnail(for: item.url, size: Self.size)
+                image = await ThumbnailCache.shared.thumbnail(for: item.url, size: Self.thumbnailPixels)
             }
         }
     }
 
-    static let size = CGSize(width: 300, height: 190)
+    static let thumbnailPixels = CGSize(width: 300, height: 190)
 }
 
 struct MediaPreview: View {
@@ -117,6 +132,7 @@ struct MediaPreview: View {
                     if let image {
                         Image(nsImage: image).resizable().interpolation(.high).aspectRatio(contentMode: .fit)
                             .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                            .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(.white.opacity(0.08), lineWidth: 1))
                             .overlay(alignment: .bottomTrailing) {
                                 if item.kind == .video {
                                     Label("Video", systemImage: "play.fill")
@@ -148,18 +164,18 @@ struct MediaPreview: View {
                 .frame(height: 26)
             }
             .task(id: item.url) {
-                image = nil
+                // Show the strip's small thumbnail at once (videos take a moment at full size), then upgrade.
+                image = ThumbnailCache.shared.cached(item.url, size: ThumbnailCell.thumbnailPixels)
                 details = MediaInfo.quickDescription(for: item)
-                image = await ThumbnailCache.shared.thumbnail(for: item.url, size: CGSize(width: 1460, height: 900))
+                if let large = await ThumbnailCache.shared.thumbnail(for: item.url, size: CGSize(width: 1460, height: 900)) { image = large }
                 details = await MediaInfo.description(for: item)
             }
         } else {
-            EmptyState(symbol: "photo.on.rectangle.angled", title: "Select a screenshot", detail: "Arrow keys move through the grid; ↩ copies the file.")
+            EmptyState(symbol: "photo.on.rectangle.angled", title: "Select a screenshot", detail: "← → move through the strip; ↩ copies the file.")
         }
     }
 }
 
-/// Dimensions, duration, size and date for the preview footer.
 enum MediaInfo {
     static func quickDescription(for item: MediaItem) -> String {
         "\(item.url.pathExtension.uppercased()) · \(item.byteCount.byteCountDescription) · \(item.createdAt.relativeDescription)"

@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// Content of the expanded island window. The black silhouette animates between the notch rect, the
-/// dictation pill and the full island. No drop shadow: a hairline edge keeps it crisp on any wallpaper.
+/// dictation pill and the full island. Pure black with no shadow or edge, so it reads as part of the notch.
 struct NotchRootView: View {
     @Bindable var state: NotchState
     let controller: NotchController
@@ -24,7 +24,7 @@ struct NotchRootView: View {
         }
         let open = phase != .collapsed
         ZStack(alignment: .top) {
-            IslandSilhouette(topFillet: open ? m.topFillet : 0, bottomRadius: radius, edge: open)
+            IslandSilhouette(topFillet: open ? m.topFillet : 0, bottomRadius: radius)
                 .frame(width: shapeSize.width, height: shapeSize.height)
 
             Group {
@@ -52,20 +52,15 @@ struct NotchRootView: View {
     }
 }
 
-/// Black notch silhouette with an optional hairline edge (never drawn along the screen edge).
+/// Pure black, like the notch itself: no shadow and no edge stroke, so the island reads as
+/// the notch growing rather than a window floating in front of it.
 struct IslandSilhouette: View {
     var topFillet: CGFloat
     var bottomRadius: CGFloat
-    var edge: Bool
 
     var body: some View {
         NotchShape(topFillet: topFillet, bottomRadius: bottomRadius)
             .fill(.black)
-            .overlay {
-                NotchShape(topFillet: topFillet, bottomRadius: bottomRadius)
-                    .stroke(.white.opacity(edge ? 0.14 : 0), lineWidth: 1)
-                    .mask(Rectangle().padding(.top, 2))
-            }
     }
 }
 
@@ -85,8 +80,7 @@ struct NotchBaseView: View {
             : (tab ? CGSize(width: g.notchRect.width + m.tabExtension * 2, height: g.notchRect.height) : g.notchRect.size)
         ZStack(alignment: .top) {
             IslandSilhouette(topFillet: toasting || tab ? min(m.topFillet, 8) : 0,
-                             bottomRadius: toasting ? m.toastBottomRadius : m.collapsedBottomRadius,
-                             edge: toasting)
+                             bottomRadius: toasting ? m.toastBottomRadius : m.collapsedBottomRadius)
                 .frame(width: size.width, height: size.height)
                 .opacity(toasting || g.hasPhysicalNotch ? 1 : 0)
 
@@ -104,14 +98,13 @@ struct NotchBaseView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .contentShape(Rectangle())
-        .onHover { state.tabHovered = $0 }
         .preferredColorScheme(.dark)
         .environment(\.colorScheme, .dark)
     }
 }
 
-/// The two small wings beside the physical notch: app glyph on the left, status / chevron on the right.
+/// The wings beside the notch. Hover and click are handled by `ClickableHostingView` in AppKit
+/// (the base window can never become key, so SwiftUI gestures never received the first click).
 struct NotchTabContent: View {
     @Bindable var state: NotchState
     let notchWidth: CGFloat
@@ -123,16 +116,18 @@ struct NotchTabContent: View {
         HStack(spacing: 0) {
             Image(systemName: "rectangle.topthird.inset.filled")
                 .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(.white.opacity(hovered ? 0.95 : 0.6))
+                .foregroundStyle(.white.opacity(hovered ? 1 : 0.62))
                 .frame(width: wing, height: height)
             Spacer().frame(width: notchWidth)
             Image(systemName: state.notchStatusSymbol ?? "chevron.down")
                 .font(.system(size: state.notchStatusSymbol == nil ? 9 : 10, weight: .bold))
-                .foregroundStyle(state.notchStatusSymbol == nil ? .white.opacity(hovered ? 0.9 : 0.4) : Theme.warning)
+                .foregroundStyle(state.notchStatusSymbol == nil ? .white.opacity(hovered ? 0.95 : 0.42) : Theme.warning)
                 .frame(width: wing, height: height)
         }
+        .scaleEffect(hovered ? 1.06 : 1, anchor: .top)
         .animation(.easeOut(duration: 0.15), value: hovered)
-        .help("Open MacBud")
+        .accessibilityLabel("MacBud")
+        .accessibilityHint("Click to open MacBud")
     }
 }
 

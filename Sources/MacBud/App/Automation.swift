@@ -90,6 +90,7 @@ enum Automation {
         "up": (126, ""), "down": (125, ""), "left": (123, ""), "right": (124, ""),
         "backspace": (51, "\u{7F}"), "delete": (51, "\u{7F}"), "space": (49, " "),
         "pageup": (116, ""), "pagedown": (121, ""), "home": (115, ""), "end": (119, ""),
+        "comma": (43, ","), "plus": (24, "+"),  // the sequence syntax reserves "," and "+"
     ]
 
     /// ANSI US layout key codes, used to build realistic events for letters and digits.

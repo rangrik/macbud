@@ -14,7 +14,7 @@ final class NotchController {
     var contentProvider: (() -> IslandContentView)?
     /// Builds the dictation pill body. Set before `install()`.
     var dictationProvider: (() -> AnyView)?
-    private var baseHost: NSHostingView<NotchBaseView>?
+    private var baseHost: ClickableHostingView<NotchBaseView>?
     private var collapseTask: Task<Void, Never>?
     private var toastTask: Task<Void, Never>?
     private var observers: [NSObjectProtocol] = []
@@ -47,10 +47,11 @@ final class NotchController {
         panel.keyHandler = { [weak self] event in self?.keyHandler?(event) ?? false }
         self.panelHost = panelHost
 
-        let baseHost = NSHostingView(rootView: NotchBaseView(state: state, controller: self))
+        let baseHost = ClickableHostingView(rootView: NotchBaseView(state: state, controller: self))
         baseHost.sizingOptions = []
+        baseHost.onClick = { [weak self] in self?.tabClicked() }
+        baseHost.onHoverChange = { [weak self] hovering in self?.state.tabHovered = hovering }
         base.contentView = baseHost
-        base.clickHandler = { [weak self] in self?.toggle() }
         self.baseHost = baseHost
         applyBaseFrame()
         base.orderFrontRegardless()
@@ -74,6 +75,12 @@ final class NotchController {
 
     func toggle(section: Section? = nil) {
         if state.isOpen, section == nil || section == state.section { close() } else { open(section: section) }
+    }
+
+    /// Mouse fallback (spec S8): a click on the notch tab, the bare notch, or a toast opens the island.
+    private func tabClicked() {
+        Trace.log("tab clicked; open=\(state.isOpen)")
+        if state.isOpen { close() } else { open() }
     }
 
     /// Shows the compact dictation pill (from collapsed, or shrinking down from the island).
@@ -223,8 +230,6 @@ final class NotchController {
 
 /// Always-on window that sits exactly over the notch. Never becomes key.
 final class NotchBaseWindow: NSWindow {
-    var clickHandler: (() -> Void)?
-
     init(contentRect: CGRect) {
         super.init(contentRect: contentRect, styleMask: [.borderless], backing: .buffered, defer: false)
         isOpaque = false
@@ -244,5 +249,37 @@ final class NotchBaseWindow: NSWindow {
     override var canBecomeMain: Bool { false }
     override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect { frameRect }
 
-    override func mouseUp(with event: NSEvent) { clickHandler?() }
+}
+
+/// Hosting view for the always-on notch window. That window can never become key, so AppKit only
+/// delivers the first click if the hit view accepts first mouse; SwiftUI's own gesture views do not,
+/// which is why the tab click did nothing. Taking over hit-testing, clicks and hover here makes the
+/// whole window one reliable button.
+final class ClickableHostingView<Content: View>: NSHostingView<Content> {
+    var onClick: (() -> Void)?
+    var onHoverChange: ((Bool) -> Void)?
+    private var pressed = false
+    private var tracking: NSTrackingArea?
+
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+    override func hitTest(_ point: NSPoint) -> NSView? { bounds.contains(convert(point, from: superview)) ? self : nil }
+
+    override func mouseDown(with event: NSEvent) { pressed = true }
+
+    override func mouseUp(with event: NSEvent) {
+        defer { pressed = false }
+        guard pressed, bounds.contains(convert(event.locationInWindow, from: nil)) else { return }
+        onClick?()
+    }
+
+    override func mouseEntered(with event: NSEvent) { onHoverChange?(true) }
+    override func mouseExited(with event: NSEvent) { onHoverChange?(false) }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let tracking { removeTrackingArea(tracking) }
+        let area = NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self)
+        addTrackingArea(area)
+        tracking = area
+    }
 }

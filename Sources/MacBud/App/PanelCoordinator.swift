@@ -169,10 +169,28 @@ final class PanelCoordinator {
         }
     }
 
+    /// Opens the Settings window in front of everything. MacBud is a background (LSUIElement) app, so
+    /// macOS may decline to activate it; ordering the window front regardless keeps it visible either way.
     func openSettings() {
         notch.close()
         NSApp.activate()
         NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+        Task { @MainActor in
+            for _ in 0..<10 {
+                if let window = Self.settingsWindow {
+                    window.orderFrontRegardless()
+                    window.makeKey()
+                    NSApp.activate()
+                    return
+                }
+                try? await Task.sleep(for: .milliseconds(50))
+            }
+            Log.app.error("settings window did not appear")
+        }
+    }
+
+    static var settingsWindow: NSWindow? {
+        NSApp.windows.first { $0.isVisible && $0.styleMask.contains(.titled) && !($0 is NotchPanel) && !($0 is NotchBaseWindow) }
     }
 
     // MARK: Footer
@@ -230,6 +248,10 @@ final class PanelCoordinator {
             "footerHint": state.footerHint ?? "",
             "welcome": showsWelcome,
             "toast": state.toast?.title ?? "",
+            "launchAtLogin": settings.launchAtLogin,
+            "installedInApplications": AppDelegate.isInstalledInApplications,
+            "bundlePath": Bundle.main.bundleURL.path,
+            "showsTab": notch.showsTab,
         ]
         switch state.section {
         case .clipboard:
