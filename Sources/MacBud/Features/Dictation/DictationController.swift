@@ -1,176 +1,241 @@
 import AppKit
 
 nonisolated enum DictationPhase: Equatable, Sendable {
-    case idle
-    case preparing(String)
-    case recording
-    case finalizing
-    case failed(String)
+    case idle, preparing(String), recording, finalizing, failed(String)
 
-    var isBusy: Bool { self == .recording || self == .finalizing || { if case .preparing = self { return true }; return false }() }
+    var isBusy: Bool {
+        switch self {
+        case .preparing, .recording, .finalizing: true
+        case .idle, .failed: false
+        }
+    }
 }
 
-/// Push-to-talk dictation: hotkey → speak → ↩ inserts (or copies) the text, esc discards.
+/// A recording owns its engine. Cancelled work can finish late without touching the next recording.
 @Observable
 final class DictationController {
-    private(set) var phase: DictationPhase = .idle
+    typealias Preparation = (@escaping @MainActor (Double) -> Void) async throws -> Locale
+
+    private(set) var phase: DictationPhase = .idle {
+        didSet {
+            if (oldValue == .idle) != (phase == .idle) { onActivityChanged?(phase != .idle) }
+        }
+    }
     private(set) var transcript = ""
-    /// Recent microphone levels, newest last, for the level meter.
     private(set) var levels: [Float] = Array(repeating: 0, count: 28)
     private(set) var elapsed: TimeInterval = 0
     private(set) var locale: Locale?
+    private(set) var canRetry = false
 
-    @ObservationIgnored private let engine = DictationEngine()
-    @ObservationIgnored private let settings: AppSettings
-    @ObservationIgnored private let context: ActionContext
-    @ObservationIgnored private let clipboard: ClipboardStore
+    @ObservationIgnored private let makeEngine: () -> any DictationEngineSession
+    @ObservationIgnored private let prepare: Preparation
+    @ObservationIgnored private let deliverText: (String, DictationDelivery) -> Void
+    @ObservationIgnored private var engine: (any DictationEngineSession)?
+    @ObservationIgnored private var operation: Task<Void, Never>?
     @ObservationIgnored private var timer: Task<Void, Never>?
-    @ObservationIgnored private var startedAt: Date?
     @ObservationIgnored private var attempt = 0
+    @ObservationIgnored private var delivery: DictationDelivery = .insert
+    @ObservationIgnored private var pendingFinish: DictationDelivery?
 
-    /// Fired when dictation ends without delivering text (cancel / empty), so the island can close.
     var onDidEnd: (() -> Void)?
+    var onActivityChanged: ((Bool) -> Void)?
 
-    init(settings: AppSettings, context: ActionContext, clipboard: ClipboardStore) {
-        self.settings = settings
-        self.context = context
-        self.clipboard = clipboard
-        engine.onTranscript = { [weak self] text in self?.transcript = text }
-        engine.onVolume = { [weak self] level in self?.pushLevel(level) }
-        engine.onError = { [weak self] error in self?.fail(error.localizedDescription) }
+    init(makeEngine: @escaping () -> any DictationEngineSession = { DictationEngine() },
+         prepare: @escaping Preparation, deliver: @escaping (String, DictationDelivery) -> Void) {
+        self.makeEngine = makeEngine
+        self.prepare = prepare
+        self.deliverText = deliver
+    }
+
+    convenience init(settings: AppSettings, context: ActionContext, clipboard: ClipboardStore,
+                     history: DictationHistoryStore) {
+        self.init(prepare: { progress in
+            guard let locale = await DictationEngine.resolveLocale(preferred: settings.dictationLocale) else {
+                throw DictationEngine.EngineError.localeUnsupported(Locale.current)
+            }
+            try Task.checkCancellation()
+            try await DictationEngine.ensureAssets(for: locale, progress: progress)
+            try Task.checkCancellation()
+            return locale
+        }, deliver: { text, action in
+            if settings.isEnabled(.dictationHistory) { history.add(text) }
+            context.deliverDictation(text, insert: action == .insert)
+            if settings.isEnabled(.clipboard) {
+                clipboard.add(ClipboardItem(id: UUID(), kind: .text, copiedAt: .now, text: text, byteCount: text.utf8.count,
+                                        sourceBundleID: Bundle.main.bundleIdentifier, contentHash: ClipboardItem.hash(ofText: text)))
+            }
+        })
     }
 
     var isActive: Bool { phase != .idle }
 
-    // MARK: Lifecycle
+    func start() { begin(file: nil, delivery: .insert) }
 
-    func start() {
+    func transcribeFile(_ url: URL, paste: Bool) {
+        begin(file: url, delivery: paste ? .insert : .copy)
+    }
+
+    private func begin(file: URL?, delivery: DictationDelivery) {
         guard !phase.isBusy else { return }
-        attempt += 1
-        let myAttempt = attempt
+        abandonSession()
+        let session = makeEngine()
+        engine = session
+        let token = attempt
+        self.delivery = delivery
+        pendingFinish = nil
         transcript = ""
         elapsed = 0
+        canRetry = false
         levels = Array(repeating: 0, count: levels.count)
-        phase = .preparing("Getting ready…")
-        Task {
+        phase = .preparing(file == nil ? "Getting ready…" : "Transcribing file…")
+        bind(session, token: token)
+        operation = Task { [weak self] in
+            guard let self else { return }
             do {
-                guard let locale = await DictationEngine.resolveLocale(preferred: settings.dictationLocale) else {
-                    throw DictationEngine.EngineError.localeUnsupported(Locale.current)
-                }
-                self.locale = locale
-                try await DictationEngine.ensureAssets(for: locale) { [weak self] fraction in
-                    guard let self, attempt == myAttempt else { return }
+                let locale = try await prepare { [weak self] fraction in
+                    guard let self, attempt == token, phase.isBusy else { return }
                     phase = .preparing("Downloading speech model… \(Int(fraction * 100))%")
                 }
-                guard attempt == myAttempt else { return }
-                try await engine.start(locale: locale)
-                guard attempt == myAttempt else { await engine.cancel(); return }
-                phase = .recording
-                startedAt = .now
-                startTimer()
-                Log.app.info("dictation recording in \(locale.identifier)")
+                guard attempt == token, !Task.isCancelled else { return }
+                self.locale = locale
+                if let file {
+                    phase = .finalizing
+                    let text = try await session.transcribe(file: file, locale: locale)
+                    guard attempt == token, !Task.isCancelled else { return }
+                    complete(text, session: session)
+                } else {
+                    try await session.start(locale: locale)
+                    guard attempt == token, !Task.isCancelled else { await session.cancel(); return }
+                    phase = .recording
+                    if let requested = pendingFinish {
+                        pendingFinish = nil
+                        finish(requested)
+                    } else {
+                        startTimer()
+                    }
+                }
             } catch {
-                guard attempt == myAttempt else { return }
-                fail(error.localizedDescription)
+                guard attempt == token, !Task.isCancelled else { return }
+                fail(error.localizedDescription, session: session, token: token)
             }
         }
     }
 
-    /// Stops recording and delivers the text (paste into the previous app, or copy).
-    func finish(paste: Bool) {
-        guard phase == .recording else { return }
+    func finish(_ action: DictationDelivery) {
+        if case .preparing = phase {
+            if pendingFinish == nil { pendingFinish = action }
+            return
+        }
+        guard phase == .recording, let engine else { return }
+        delivery = action
+        finalize(engine, retry: false)
+    }
+
+    /// Compatibility for automation clients. Live controls use explicit actions.
+    func finish(paste: Bool) { finish(paste ? .insert : .copy) }
+
+    func retry() {
+        guard case .failed = phase, canRetry, let engine else { return }
+        finalize(engine, retry: true)
+    }
+
+    private func finalize(_ session: any DictationEngineSession, retry: Bool) {
         phase = .finalizing
+        canRetry = false
         stopTimer()
-        let myAttempt = attempt
-        Task {
+        let token = attempt
+        operation = Task { [weak self] in
+            guard let self else { return }
             do {
-                let text = try await engine.stop()
-                guard attempt == myAttempt else { return }
-                deliver(text, paste: paste)
+                let text: String
+                if retry { text = try await session.retry() } else { text = try await session.stop() }
+                guard attempt == token, !Task.isCancelled else { return }
+                complete(text, session: session)
             } catch {
-                guard attempt == myAttempt else { return }
-                fail(error.localizedDescription)
+                guard attempt == token, !Task.isCancelled else { return }
+                fail(error.localizedDescription, session: session, token: token)
             }
         }
     }
 
     func cancel() {
         guard isActive else { return }
-        attempt += 1
-        stopTimer()
+        abandonSession()
         phase = .idle
         transcript = ""
-        Task { await engine.cancel() }
+        canRetry = false
+        delivery = .insert
         onDidEnd?()
     }
 
-    /// Runs the pipeline on an audio file instead of the microphone (automation and tests).
-    func transcribeFile(_ url: URL, paste: Bool) {
-        guard !phase.isBusy else { return }
+    private func abandonSession() {
+        pendingFinish = nil
         attempt += 1
-        let myAttempt = attempt
-        transcript = ""
-        phase = .preparing("Transcribing file…")
-        Task {
-            do {
-                guard let locale = await DictationEngine.resolveLocale(preferred: settings.dictationLocale) else {
-                    throw DictationEngine.EngineError.localeUnsupported(Locale.current)
-                }
-                self.locale = locale
-                try await DictationEngine.ensureAssets(for: locale) { [weak self] fraction in
-                    self?.phase = .preparing("Downloading speech model… \(Int(fraction * 100))%")
-                }
-                phase = .finalizing
-                let text = try await engine.transcribe(file: url, locale: locale)
-                guard attempt == myAttempt else { return }
-                deliver(text, paste: paste)
-            } catch {
-                guard attempt == myAttempt else { return }
-                fail(error.localizedDescription)
-            }
-        }
-    }
-
-    // MARK: Internals
-
-    private func deliver(_ text: String, paste: Bool) {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        phase = .idle
-        guard !trimmed.isEmpty else {
-            context.showHint("Nothing heard")
-            transcript = ""
-            onDidEnd?()
-            return
-        }
-        transcript = trimmed
-        let paster = context.paster
-        let description = trimmed.count > 48 ? String(trimmed.prefix(48)) + "…" : trimmed
-        context.perform(paste: paste, description: description) {
-            paster.write(text: trimmed)
-        }
-        clipboard.add(ClipboardItem(id: UUID(), kind: .text, copiedAt: .now, text: trimmed, byteCount: trimmed.utf8.count,
-                                    sourceBundleID: Bundle.main.bundleIdentifier, contentHash: ClipboardItem.hash(ofText: trimmed)))
-    }
-
-    private func fail(_ message: String) {
+        operation?.cancel()
+        operation = nil
         stopTimer()
-        phase = .failed(message)
-        Log.app.error("dictation failed: \(message)")
-        Task { await engine.cancel() }
+        if let old = engine {
+            old.onTranscript = nil
+            old.onVolume = nil
+            old.onError = nil
+            old.discardRecording()
+            Task { await old.cancel() }
+        }
+        engine = nil
     }
 
-    private func pushLevel(_ level: Float) {
-        levels.removeFirst()
-        levels.append(level)
+    private func bind(_ session: any DictationEngineSession, token: Int) {
+        session.onTranscript = { [weak self] text in
+            guard let self, attempt == token, phase.isBusy else { return }
+            transcript = text
+        }
+        session.onVolume = { [weak self] level in
+            guard let self, attempt == token, phase == .recording else { return }
+            levels.removeFirst()
+            levels.append(level)
+        }
+        session.onError = { [weak self, weak session] error in
+            guard let self, let session, attempt == token, phase.isBusy else { return }
+            fail(error.localizedDescription, session: session, token: token)
+        }
+    }
+
+    private func complete(_ text: String, session: any DictationEngineSession) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let action = delivery
+        session.discardRecording()
+        session.onError = nil
+        phase = .idle
+        transcript = trimmed
+        canRetry = false
+        engine = nil
+        delivery = .insert
+        if trimmed.isEmpty { onDidEnd?() } else { deliverText(trimmed, action) }
+    }
+
+    private func fail(_ message: String, session: any DictationEngineSession, token: Int) {
+        guard phase.isBusy else { return }
+        stopTimer()
+        operation?.cancel()
+        phase = .failed(message)
+        canRetry = false
+        Log.app.error("dictation failed: \(message)")
+        operation = Task { [weak self] in
+            await session.suspend()
+            guard let self, attempt == token, !Task.isCancelled else { return }
+            canRetry = session.canRetry
+        }
     }
 
     private func startTimer() {
-        timer?.cancel()
+        stopTimer()
+        let start = ContinuousClock.now
         timer = Task { [weak self] in
             while !Task.isCancelled {
-                try? await Task.sleep(for: .milliseconds(250))
-                guard let self, let startedAt else { return }
-                elapsed = Date.now.timeIntervalSince(startedAt)
+                do { try await Task.sleep(for: .milliseconds(250)) } catch { return }
+                guard let self else { return }
+                let duration = start.duration(to: .now).components
+                elapsed = Double(duration.seconds) + Double(duration.attoseconds) / 1e18
             }
         }
     }

@@ -17,6 +17,7 @@ nonisolated struct HotKey: Codable, Hashable, Sendable {
     static let defaultToggle = HotKey(keyCode: UInt16(kVK_Space), modifiers: .option)
     static let fallbackToggle = HotKey(keyCode: UInt16(kVK_Space), modifiers: [.control, .option])
     static let defaultDictation = HotKey(keyCode: UInt16(kVK_ANSI_D), modifiers: [.option, .shift])
+    static let defaultHoldToTalk = HotKey(keyCode: UInt16(kVK_ANSI_D), modifiers: [.control, .option])
 
     var carbonModifiers: UInt32 {
         var m: UInt32 = 0

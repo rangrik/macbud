@@ -8,6 +8,19 @@ final class ScreenshotLibrary {
     private(set) var isScanning = false
     private(set) var missingFolders: [URL] = []
     private(set) var lastScan: Date?
+    var isEnabled = true {
+        didSet {
+            guard isEnabled != oldValue else { return }
+            rebuildWatchers()
+            if isEnabled {
+                requestRescan(delay: .zero)
+            } else {
+                rescanTask?.cancel()
+                scanTask?.cancel()
+                isScanning = false
+            }
+        }
+    }
 
     var folders: [URL] = [] { didSet { if folders != oldValue { rebuildWatchers(); requestRescan(delay: .zero) } } }
     var includeSubfolders = false { didSet { if includeSubfolders != oldValue { requestRescan(delay: .zero) } } }
@@ -15,6 +28,7 @@ final class ScreenshotLibrary {
 
     @ObservationIgnored private var watchers: [FolderWatcher] = []
     @ObservationIgnored private var rescanTask: Task<Void, Never>?
+    @ObservationIgnored private var scanTask: Task<(items: [MediaItem], missing: [URL]), Never>?
 
     init() {}
 
@@ -27,6 +41,7 @@ final class ScreenshotLibrary {
     func item(id: URL) -> MediaItem? { items.first { $0.url == id } }
 
     func requestRescan(delay: Duration = .milliseconds(400)) {
+        guard isEnabled else { return }
         rescanTask?.cancel()
         rescanTask = Task { [weak self] in
             if delay > .zero { try? await Task.sleep(for: delay) }
@@ -36,11 +51,16 @@ final class ScreenshotLibrary {
     }
 
     func rescan() async {
+        guard isEnabled else { return }
+        scanTask?.cancel()
         isScanning = true
         let folders = folders, subfolders = includeSubfolders, videos = includeVideos
-        let result = await Task.detached(priority: .userInitiated) {
+        let task = Task.detached(priority: .userInitiated) {
             Self.scan(folders: folders, includeSubfolders: subfolders, includeVideos: videos)
-        }.value
+        }
+        scanTask = task
+        let result = await task.value
+        guard isEnabled, !task.isCancelled else { return }
         items = result.items
         missingFolders = result.missing
         lastScan = .now
@@ -61,10 +81,12 @@ final class ScreenshotLibrary {
         var options: FileManager.DirectoryEnumerationOptions = [.skipsHiddenFiles, .skipsPackageDescendants]
         if !includeSubfolders { options.insert(.skipsSubdirectoryDescendants) }
         for folder in folders {
+            guard !Task.isCancelled else { break }
             var isDir: ObjCBool = false
             guard fm.fileExists(atPath: folder.path, isDirectory: &isDir), isDir.boolValue else { missing.append(folder); continue }
             guard let enumerator = fm.enumerator(at: folder, includingPropertiesForKeys: Array(keys), options: options) else { continue }
             for case let url as URL in enumerator {
+                guard !Task.isCancelled else { break }
                 guard let values = try? url.resourceValues(forKeys: keys), values.isRegularFile == true,
                       let type = values.contentType, let kind = MediaItem.kind(for: type) else { continue }
                 if kind == .video, !includeVideos { continue }
@@ -77,6 +99,7 @@ final class ScreenshotLibrary {
     }
 
     private func rebuildWatchers() {
+        guard isEnabled else { watchers = []; return }
         watchers = folders.compactMap { url in
             FolderWatcher(url: url) { [weak self] in
                 Task { @MainActor in self?.requestRescan() }

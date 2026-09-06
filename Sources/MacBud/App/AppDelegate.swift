@@ -11,6 +11,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private(set) var coordinator: PanelCoordinator!
     private(set) var hotKeys: HotKeyBinder!
     private var monitor: ClipboardMonitor!
+    var clipboardCaptureRunning: Bool { monitor?.isRunning ?? false }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         coordinator = PanelCoordinator(state: notch.state, notch: notch, settings: settings,
@@ -19,21 +20,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         notch.willOpen = { [coordinator] in coordinator!.willOpen() }
         notch.contentProvider = { [coordinator] in IslandContentView(state: coordinator!.state, coordinator: coordinator!) }
         notch.dictationProvider = { [coordinator, settings] in
-            AnyView(DictationView(controller: coordinator!.dictation, settings: settings, notchHeight: coordinator!.state.geometry.notchRect.height))
+            AnyView(DictationView(controller: coordinator!.dictation, settings: settings,
+                                 notchHeight: coordinator!.state.geometry.notchRect.height,
+                                 holdingToTalk: coordinator!.isHoldingToTalk,
+                                 shortcut: coordinator!.dictationSessionHotKey?.displayString))
         }
         notch.didClose = { [coordinator] in coordinator!.didClose() }
         notch.state.showsNotchTab = settings.showNotchTab
-        notch.state.notchStatusSymbol = settings.clipboardPaused ? "pause.fill" : nil
+        notch.state.notchStatusSymbol = settings.isEnabled(.clipboard) && settings.clipboardPaused ? "pause.fill" : nil
+        coordinator.keepAwake.onChange = { [weak coordinator, weak notch] in
+            notch?.state.keepsAwake = coordinator?.keepAwake.isActive ?? false
+            if let error = coordinator?.keepAwake.errorMessage { coordinator?.context.showHint(error) }
+        }
         notch.install()
         configureLaunchAtLoginIfNeeded()
 
         clipboardStore.limit = settings.historyLimit
+        coordinator.dictationHistoryStore.limit = settings.historyLimit
         Task {
             await clipboardStore.load()
             await snippetStore.load()
+            await coordinator.dictationHistoryStore.load()
+            if settings.isEnabled(.dictationHistory), !settings.hasMigratedDictationHistory {
+                coordinator.dictationHistoryStore.importLegacy(clipboardStore.items, sourceBundleID: Bundle.main.bundleIdentifier ?? "com.rangrik.macbud")
+                await coordinator.dictationHistoryStore.flush()
+                settings.hasMigratedDictationHistory = true
+            }
         }
         monitor = ClipboardMonitor(store: clipboardStore, settings: settings)
-        monitor.start()
+        if settings.isEnabled(.clipboard) { monitor.start() }
 
         applyLibrarySettings()
         hotKeys = HotKeyBinder(settings: settings, coordinator: coordinator)
@@ -58,12 +73,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 
     func applicationWillTerminate(_ notification: Notification) {
+        coordinator?.keepAwake.stop()
+        coordinator?.dictation.cancel()
         HotKeyCenter.shared.unregisterAll()
     }
 
     // MARK: Settings → subsystems
 
     private func applyLibrarySettings() {
+        library.isEnabled = settings.isEnabled(.screenshots)
         library.includeSubfolders = settings.includeSubfolders
         library.includeVideos = settings.includeVideos
         library.folders = settings.screenshotFolderURLs
@@ -78,17 +96,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             _ = settings.toggleHotKey
             _ = settings.sectionHotKeys
             _ = settings.dictationHotKey
+            _ = settings.holdToTalkHotKey
             _ = settings.keyBindings
             _ = settings.showNotchTab
             _ = settings.clipboardPaused
+            _ = settings.disabledFeatures
+            _ = settings.sectionOrder
         } onChange: {
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 applyLibrarySettings()
+                if settings.isEnabled(.clipboard) { monitor.start() } else { monitor.stop() }
+                coordinator.applyFeatureSettings()
                 clipboardStore.limit = settings.historyLimit
+                coordinator.dictationHistoryStore.limit = settings.historyLimit
                 hotKeys.apply()
                 notch.state.showsNotchTab = settings.showNotchTab
-                notch.state.notchStatusSymbol = settings.clipboardPaused ? "pause.fill" : nil
+                notch.state.notchStatusSymbol = settings.isEnabled(.clipboard) && settings.clipboardPaused ? "pause.fill" : nil
                 notch.applyBaseFrame(phase: notch.state.basePhase)
                 observeSettings()
             }

@@ -28,13 +28,22 @@ private struct GlobalShortcutsSection: View {
             LabeledContent("Open MacBud") {
                 HotKeyRecorder(hotKey: $settings.toggleHotKey, onRecordingChanged: suspendHotKeys)
             }
-            ForEach(Section.allCases) { section in
+            ForEach(settings.sectionOrder) { section in
                 LabeledContent("Open \(section.title) directly") {
                     HotKeyRecorder(hotKey: sectionBinding(section), onRecordingChanged: suspendHotKeys)
                 }
+                .disabled(!settings.isEnabled(section.feature))
             }
-            LabeledContent("Start dictation") {
+            LabeledContent("Toggle dictation / insert") {
                 HotKeyRecorder(hotKey: $settings.dictationHotKey, onRecordingChanged: suspendHotKeys)
+            }
+            .disabled(!settings.isEnabled(.dictation))
+            LabeledContent("Hold to talk") {
+                HotKeyRecorder(hotKey: $settings.holdToTalkHotKey, onRecordingChanged: suspendHotKeys)
+            }
+            .disabled(!settings.isEnabled(.dictation))
+            ForEach([hotKeys?.dictationProblem, hotKeys?.holdToTalkProblem].compactMap { $0 }, id: \.self) { problem in
+                Label(problem, systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange).font(.callout)
             }
             if let problem = hotKeys?.toggleProblem {
                 Label(problem, systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange).font(.callout)
@@ -42,7 +51,7 @@ private struct GlobalShortcutsSection: View {
         } header: {
             Text("Global — work from any app")
         } footer: {
-            Text("A global shortcut needs ⌘, ⌥ or ⌃ (or a function key). Pressing the dictation shortcut again while recording inserts the text.")
+            Text("Press the dictation shortcut again to stop and insert. Hold to talk records while its shortcut is held, then inserts on release. With no editable input, the text is copied. Escape cancels.")
         }
     }
 

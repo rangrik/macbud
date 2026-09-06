@@ -1,38 +1,69 @@
 import AVFoundation
 import Speech
 
-/// On-device speech-to-text using the macOS 26 Speech framework (`SpeechAnalyzer` + `DictationTranscriber`).
-/// Audio from the microphone is converted to the analyzer's preferred format and streamed in; volatile
-/// results give live text while speaking, final results arrive after `stop()`.
-final class DictationEngine {
+/// Each engine owns one recording. Recognition attempts can be replaced without
+/// losing that audio, and late results can only update their original attempt.
+@MainActor final class DictationEngine {
     enum EngineError: LocalizedError {
         case microphoneDenied, localeUnsupported(Locale), noAudioFormat, notRunning
+        case noRecording, microphoneChanged, startupTimedOut, finalizationTimedOut
 
         var errorDescription: String? {
             switch self {
             case .microphoneDenied: "Microphone access is off. Allow it in System Settings › Privacy & Security › Microphone."
-            case .localeUnsupported(let l): "\(l.localizedString(forIdentifier: l.identifier) ?? l.identifier) isn't supported for dictation."
-            case .noAudioFormat: "No compatible audio format for the speech model."
+            case .localeUnsupported(let locale): "\(locale.localizedString(forIdentifier: locale.identifier) ?? locale.identifier) isn't supported for dictation."
+            case .noAudioFormat: "No compatible microphone audio format is available. Check your input device in System Settings › Sound."
             case .notRunning: "Dictation isn't running."
+            case .noRecording: "There is no saved audio to retry. Start a new recording."
+            case .microphoneChanged: "The microphone changed or disconnected. Retry the audio already recorded, or discard it and start again."
+            case .startupTimedOut: "Dictation took too long to start. Try again."
+            case .finalizationTimedOut: "Transcription took too long. Your recording is saved; try again."
             }
         }
     }
 
-    private let audioEngine = AVAudioEngine()
-    private var analyzer: SpeechAnalyzer?
-    private var transcriber: DictationTranscriber?
-    private var inputContinuation: AsyncStream<AnalyzerInput>.Continuation?
-    private var resultsTask: Task<Void, Never>?
-    private var finalSegments: [String] = []
-    private var volatileSegment = ""
+    private final class Attempt {
+        let transcriber: DictationTranscriber
+        let analyzer: SpeechAnalyzer
+        var collector: Task<Void, Error>?
+        var finalSegments: [String] = []
+        var volatileSegment = ""
+        var failure: Error?
+        var valid = true
 
-    /// Live text (finalized segments plus the current volatile guess).
-    var onTranscript: ((String) -> Void)?
-    /// 0…1 microphone level, ~20 times a second.
-    var onVolume: ((Float) -> Void)?
-    var onError: ((Error) -> Void)?
+        init(locale: Locale) {
+            transcriber = DictationTranscriber(locale: locale, preset: .progressiveLongDictation)
+            analyzer = SpeechAnalyzer(modules: [transcriber])
+        }
+
+        var text: String {
+            (finalSegments + [volatileSegment])
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }.joined(separator: " ")
+        }
+    }
+
+    private let audioEngine = AVAudioEngine()
+    private var attempt: Attempt?
+    private var inputContinuation: AsyncStream<AnalyzerInput>.Continuation?
+    private var configurationObserver: NSObjectProtocol?
+    private var tapInstalled = false
+    private var audioCapture: DictationAudioCapture?
+    private var recording: DictationRecording?
+    private var recordingLocale: Locale?
+    private var cleanupTask: Task<Void, Never>?
+    private let recordingDirectory: URL
+
+    init(recordingDirectory: URL = FileManager.default.temporaryDirectory) {
+        self.recordingDirectory = recordingDirectory
+    }
+
+    var onTranscript: (@MainActor @Sendable (String) -> Void)?
+    var onVolume: (@MainActor @Sendable (Float) -> Void)?
+    var onError: (@MainActor @Sendable (Error) -> Void)?
 
     private(set) var isRunning = false
+    var canRetry: Bool { recording?.hasAudio == true && recordingLocale != nil }
 
     // MARK: Locales & assets
 
@@ -77,124 +108,284 @@ final class DictationEngine {
 
     func start(locale: Locale) async throws {
         guard !isRunning else { return }
-        guard await Self.requestMicrophone() else { throw EngineError.microphoneDenied }
-        finalSegments = []
-        volatileSegment = ""
-
-        let transcriber = DictationTranscriber(locale: locale, preset: .progressiveLongDictation)
-        let analyzer = SpeechAnalyzer(modules: [transcriber])
-        guard let targetFormat = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [transcriber]) else {
-            throw EngineError.noAudioFormat
-        }
-        self.transcriber = transcriber
-        self.analyzer = analyzer
-
-        let (stream, continuation) = AsyncStream<AnalyzerInput>.makeStream()
-        inputContinuation = continuation
-
-        let input = audioEngine.inputNode
-        let inputFormat = input.outputFormat(forBus: 0)
-        guard let converter = AVAudioConverter(from: inputFormat, to: targetFormat) else { throw EngineError.noAudioFormat }
-        let ratio = targetFormat.sampleRate / inputFormat.sampleRate
-        nonisolated(unsafe) let unsafeConverter = converter
-        let onVolume = self.onVolume
-        input.installTap(onBus: 0, bufferSize: 4096, format: inputFormat) { buffer, _ in
-            if let onVolume {
-                let level = Self.rmsLevel(of: buffer)
-                Task { @MainActor in onVolume(level) }
+        await suspend()
+        try Task.checkCancellation()
+        discardRecording()
+        let attempt = beginAttempt(locale: locale)
+        do {
+            guard await Self.requestMicrophone() else { throw EngineError.microphoneDenied }
+            try checkCurrent(attempt)
+            guard let targetFormat = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [attempt.transcriber]) else {
+                throw EngineError.noAudioFormat
             }
-            let capacity = AVAudioFrameCount(Double(buffer.frameLength) * ratio) + 16
-            guard let converted = AVAudioPCMBuffer(pcmFormat: targetFormat, frameCapacity: capacity) else { return }
-            var consumed = false
-            var error: NSError?
-            let status = unsafeConverter.convert(to: converted, error: &error) { _, outStatus in
-                if consumed { outStatus.pointee = .noDataNow; return nil }
-                consumed = true
-                outStatus.pointee = .haveData
-                return buffer
-            }
-            guard status != .error, converted.frameLength > 0 else { return }
-            continuation.yield(AnalyzerInput(buffer: converted))
-        }
-
-        resultsTask = Task { [weak self] in
+            try checkCurrent(attempt)
+            let input = audioEngine.inputNode
+            let inputFormat = input.outputFormat(forBus: 0)
+            guard inputFormat.sampleRate > 0, inputFormat.channelCount > 0 else { throw EngineError.noAudioFormat }
+            let recording = try DictationRecording(format: inputFormat, directory: recordingDirectory)
+            self.recording = recording
+            recordingLocale = locale
+            let capture = try DictationAudioCapture(inputFormat: inputFormat, targetFormat: targetFormat, recording: recording)
+            audioCapture = capture
+            let (stream, continuation) = AsyncStream<AnalyzerInput>.makeStream()
+            inputContinuation = continuation
+            collectResults(for: attempt)
             do {
-                for try await result in transcriber.results {
-                    guard let self else { return }
-                    let text = String(result.text.characters)
-                    if result.isFinal {
-                        finalSegments.append(text)
-                        volatileSegment = ""
-                    } else {
-                        volatileSegment = text
-                    }
-                    onTranscript?(assembledText)
+                try await DictationDeadline.run(timeout: .seconds(30)) {
+                    try await attempt.analyzer.start(inputSequence: stream)
                 }
-            } catch {
-                self?.onError?(error)
+            } catch EngineError.finalizationTimedOut {
+                throw EngineError.startupTimedOut
             }
-        }
+            try checkCurrent(attempt)
 
-        audioEngine.prepare()
-        try audioEngine.start()
-        try await analyzer.start(inputSequence: stream)
-        isRunning = true
+            // AVFAudio invokes this on its audio queue. Without @Sendable the
+            // closure inherits MainActor isolation and traps on the first buffer.
+            input.installTap(onBus: 0, bufferSize: 4096, format: inputFormat) { @Sendable [weak self] buffer, _ in
+                do {
+                    guard let output = try capture.process(buffer) else { return }
+                    continuation.yield(output.input)
+                    Task { @MainActor [weak self] in
+                        guard let self, self.attempt === attempt, self.isRunning else { return }
+                        self.onVolume?(output.volume)
+                    }
+                } catch {
+                    Task { @MainActor [weak self] in self?.captureFailed(error, attempt: attempt) }
+                }
+            }
+            tapInstalled = true
+            configurationObserver = NotificationCenter.default.addObserver(
+                forName: .AVAudioEngineConfigurationChange, object: audioEngine, queue: nil
+            ) { [weak self] _ in
+                // The notification arrives on an audio queue; tear down on the main actor.
+                Task { @MainActor [weak self] in
+                    guard let self, self.isRunning else { return }
+                    self.captureFailed(EngineError.microphoneChanged, attempt: attempt)
+                }
+            }
+            audioEngine.prepare()
+            try audioEngine.start()
+            isRunning = true
+        } catch {
+            endAttempt(attempt, cancelAnalyzer: true)
+            throw error
+        }
     }
 
-    /// Stops capturing, waits for the final transcript and returns it.
+    /// Stop the microphone and seal its file before waiting for the final words.
     func stop() async throws -> String {
-        guard isRunning, let analyzer else { throw EngineError.notRunning }
-        isRunning = false
-        audioEngine.inputNode.removeTap(onBus: 0)
-        audioEngine.stop()
-        inputContinuation?.finish()
-        inputContinuation = nil
-        try await analyzer.finalizeAndFinishThroughEndOfInput()
-        await resultsTask?.value
-        resultsTask = nil
-        self.analyzer = nil
-        transcriber = nil
-        return assembledText
+        guard isRunning, let attempt else { throw EngineError.notRunning }
+        let captureError = stopCapture(drainConverter: true)
+        do {
+            if let captureError { throw captureError }
+            if recording?.hasAudibleAudio != true {
+                try checkCurrent(attempt)
+                endAttempt(attempt, cancelAnalyzer: true)
+                onTranscript?("")
+                return ""
+            }
+            try await finish(attempt, duration: recording?.duration ?? 0)
+            try checkCurrent(attempt)
+            let text = attempt.text
+            endAttempt(attempt, cancelAnalyzer: false)
+            return text
+        } catch {
+            endAttempt(attempt, cancelAnalyzer: true)
+            throw error
+        }
+    }
+
+    /// Replay the sealed recording, without accessing the microphone again.
+    func retry() async throws -> String {
+        await suspend()
+        try Task.checkCancellation()
+        guard let recording, let locale = recordingLocale, recording.hasAudio else { throw EngineError.noRecording }
+        return try await recognizeFile(recording.url, locale: locale, duration: recording.duration)
+    }
+
+    /// Stops microphone/analyzer resources while preserving the saved recording.
+    func suspend() async {
+        if let attempt { endAttempt(attempt, cancelAnalyzer: true) }
+        else { stopCapture() }
+        await cleanupTask?.value
+    }
+
+    /// Used after delivery/discard. This removes only MacBud's own temporary file.
+    func discardRecording() {
+        recording?.discard()
+        recording = nil
+        recordingLocale = nil
     }
 
     func cancel() async {
-        audioEngine.inputNode.removeTap(onBus: 0)
-        audioEngine.stop()
-        inputContinuation?.finish()
-        inputContinuation = nil
-        await analyzer?.cancelAndFinishNow()
-        resultsTask?.cancel()
-        resultsTask = nil
-        analyzer = nil
-        transcriber = nil
-        isRunning = false
+        if let attempt { endAttempt(attempt, cancelAnalyzer: true) }
+        else { stopCapture() }
+        discardRecording()
+        await cleanupTask?.value
     }
 
-    /// Transcribes an audio file with the same pipeline (used by tests and automation).
+    /// Imports and retains a private copy, so file-transcription failures can also retry.
+    /// The caller's source file is never changed or removed.
     func transcribe(file url: URL, locale: Locale) async throws -> String {
-        finalSegments = []
-        volatileSegment = ""
-        let transcriber = DictationTranscriber(locale: locale, preset: .progressiveLongDictation)
-        let analyzer = SpeechAnalyzer(modules: [transcriber])
-        let audioFile = try AVAudioFile(forReading: url)
-        let collector = Task { [weak self] in
-            for try await result in transcriber.results {
-                guard let self else { return }
-                let text = String(result.text.characters)
-                if result.isFinal { finalSegments.append(text); volatileSegment = "" } else { volatileSegment = text }
-                onTranscript?(assembledText)
+        await suspend()
+        try Task.checkCancellation()
+        discardRecording()
+        let source = try AVAudioFile(forReading: url)
+        let recording = try DictationRecording(format: source.processingFormat, directory: recordingDirectory)
+        self.recording = recording
+        recordingLocale = locale
+        guard let buffer = AVAudioPCMBuffer(pcmFormat: source.processingFormat, frameCapacity: 16_384) else {
+            recording.close()
+            throw EngineError.noAudioFormat
+        }
+        do {
+            while source.framePosition < source.length {
+                try Task.checkCancellation()
+                try source.read(into: buffer)
+                if buffer.frameLength == 0 { break }
+                try recording.append(buffer)
+                // Imported audio can be long; allow cancellation between bounded chunks.
+                await Task.yield()
+                guard self.recording === recording else { throw CancellationError() }
+            }
+            recording.close()
+            try Task.checkCancellation()
+            return try await recognizeFile(recording.url, locale: locale, duration: recording.duration)
+        } catch {
+            recording.close()
+            throw error
+        }
+    }
+
+    // MARK: Recognition lifecycle
+
+    private func beginAttempt(locale: Locale) -> Attempt {
+        let attempt = Attempt(locale: locale)
+        self.attempt = attempt
+        return attempt
+    }
+
+    private func collectResults(for attempt: Attempt) {
+        attempt.collector = Task { [weak self, weak attempt] in
+            guard let attempt else { return }
+            do {
+                for try await result in attempt.transcriber.results {
+                    guard let self else { throw CancellationError() }
+                    try self.checkCurrent(attempt)
+                    let text = String(result.text.characters)
+                    if result.isFinal {
+                        attempt.finalSegments.append(text)
+                        attempt.volatileSegment = ""
+                    } else {
+                        attempt.volatileSegment = text
+                    }
+                    self.onTranscript?(attempt.text)
+                }
+            } catch {
+                if let self, self.attempt === attempt, attempt.valid, !Task.isCancelled {
+                    attempt.failure = error
+                    if self.isRunning { self.captureFailed(error, attempt: attempt) }
+                }
+                throw error
             }
         }
-        try await analyzer.start(inputAudioFile: audioFile, finishAfterFile: true)
-        try await analyzer.finalizeAndFinishThroughEndOfInput()
-        try await collector.value
-        return assembledText
     }
 
-    // MARK: Helpers
+    private func recognizeFile(_ url: URL, locale: Locale, duration: TimeInterval) async throws -> String {
+        try Task.checkCancellation()
+        // The retained copy measured every sample while writing. Avoid starting
+        // speech services for silence, which must never become invented words.
+        guard recording?.hasAudibleAudio == true else {
+            onTranscript?("")
+            return ""
+        }
+        let attempt = beginAttempt(locale: locale)
+        do {
+            let file = try AVAudioFile(forReading: url)
+            collectResults(for: attempt)
+            // Bound file startup as well as finalization: both can wait on model services.
+            try await DictationDeadline.run(timeout: finalizationBudget(duration: duration)) {
+                try await attempt.analyzer.start(inputAudioFile: file, finishAfterFile: true)
+                try await attempt.analyzer.finalizeAndFinishThroughEndOfInput()
+                try await attempt.collector?.value
+            }
+            try checkCurrent(attempt)
+            let text = attempt.text
+            endAttempt(attempt, cancelAnalyzer: false)
+            return text
+        } catch {
+            endAttempt(attempt, cancelAnalyzer: true)
+            throw error
+        }
+    }
 
-    private var assembledText: String {
-        (finalSegments + [volatileSegment]).map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }.joined(separator: " ")
+    private func finish(_ attempt: Attempt, duration: TimeInterval) async throws {
+        try await DictationDeadline.run(timeout: finalizationBudget(duration: duration)) {
+            try await attempt.analyzer.finalizeAndFinishThroughEndOfInput()
+            try await attempt.collector?.value
+        }
+    }
+
+    private func finalizationBudget(duration: TimeInterval) -> Duration {
+        .seconds(min(300, max(15, 10 + duration * 1.5)))
+    }
+
+    private func checkCurrent(_ attempt: Attempt) throws {
+        try Task.checkCancellation()
+        if let failure = attempt.failure { throw failure }
+        guard self.attempt === attempt, attempt.valid else { throw CancellationError() }
+    }
+
+    private func captureFailed(_ error: Error, attempt: Attempt) {
+        guard self.attempt === attempt, attempt.valid else { return }
+        attempt.failure = error
+        endAttempt(attempt, cancelAnalyzer: true)
+        onError?(error)
+    }
+
+    @discardableResult
+    private func stopCapture(drainConverter: Bool = false) -> Error? {
+        isRunning = false
+        if let configurationObserver {
+            NotificationCenter.default.removeObserver(configurationObserver)
+            self.configurationObserver = nil
+        }
+        if tapInstalled {
+            audioEngine.inputNode.removeTap(onBus: 0)
+            tapInstalled = false
+        }
+        audioEngine.stop()
+        var captureError: Error?
+        if drainConverter {
+            do {
+                for input in try audioCapture?.finish() ?? [] { inputContinuation?.yield(input) }
+            } catch {
+                captureError = error
+            }
+        }
+        audioCapture = nil
+        recording?.close()
+        inputContinuation?.finish()
+        inputContinuation = nil
+        return captureError
+    }
+
+    private func endAttempt(_ attempt: Attempt, cancelAnalyzer: Bool) {
+        guard self.attempt === attempt else { return }
+        attempt.valid = false
+        stopCapture()
+        self.attempt = nil
+        attempt.collector?.cancel()
+        attempt.collector = nil
+        if cancelAnalyzer {
+            let analyzer = attempt.analyzer
+            cleanupTask = Task {
+                // Framework cancellation must not keep Retry/Discard disabled indefinitely.
+                try? await DictationDeadline.run(timeout: .seconds(2)) {
+                    await analyzer.cancelAndFinishNow()
+                }
+            }
+        }
     }
 
     private static func requestMicrophone() async -> Bool {
@@ -203,14 +394,5 @@ final class DictationEngine {
         case .notDetermined: return await AVCaptureDevice.requestAccess(for: .audio)
         default: return false
         }
-    }
-
-    nonisolated private static func rmsLevel(of buffer: AVAudioPCMBuffer) -> Float {
-        guard let channel = buffer.floatChannelData?[0], buffer.frameLength > 0 else { return 0 }
-        var sum: Float = 0
-        let n = Int(buffer.frameLength)
-        for i in 0..<n { sum += channel[i] * channel[i] }
-        let rms = sqrt(sum / Float(n))
-        return min(1, rms * 4)
     }
 }

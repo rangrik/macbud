@@ -7,11 +7,20 @@ struct SettingsView: View {
     var body: some View {
         TabView {
             Tab("General", systemImage: "gearshape") { GeneralSettings(settings: app.settings, hotKeys: app.hotKeys) }
+            Tab("Features", systemImage: "slider.horizontal.3") { FeaturesSettings(settings: app.settings) }
             Tab("Shortcuts", systemImage: "keyboard") { ShortcutsSettings(settings: app.settings, hotKeys: app.hotKeys) }
-            Tab("Clipboard", systemImage: "doc.on.clipboard") { ClipboardSettings(settings: app.settings, store: app.clipboardStore) }
-            Tab("Snippets", systemImage: "text.badge.checkmark") { SnippetsSettings(store: app.snippetStore) }
-            Tab("Screenshots", systemImage: "photo.on.rectangle.angled") { ScreenshotSettings(settings: app.settings, library: app.library) }
-            Tab("Dictation", systemImage: "mic") { DictationSettings(settings: app.settings) }
+            if app.settings.isEnabled(.clipboard) {
+                Tab("Clipboard", systemImage: "doc.on.clipboard") { ClipboardSettings(settings: app.settings, store: app.clipboardStore) }
+            }
+            if app.settings.isEnabled(.snippets) {
+                Tab("Snippets", systemImage: "text.badge.checkmark") { SnippetsSettings(store: app.snippetStore) }
+            }
+            if app.settings.isEnabled(.screenshots) {
+                Tab("Screenshots", systemImage: "photo.on.rectangle.angled") { ScreenshotSettings(settings: app.settings, library: app.library) }
+            }
+            if app.settings.isEnabled(.dictation) {
+                Tab("Dictation", systemImage: "mic") { DictationSettings(settings: app.settings) }
+            }
             Tab("About", systemImage: "info.circle") { AboutView() }
         }
         .frame(width: 640, height: 520)

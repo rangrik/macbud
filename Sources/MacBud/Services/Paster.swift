@@ -62,6 +62,27 @@ final class Paster {
 
     // MARK: Pasting into another app
 
+    /// Dictation leaves focus in the external input. Wait for the triggering chord to be released,
+    /// then inspect the current insertion point; never activate an old application or send Return.
+    func insertIntoFocusedInput(_ text: String, expectedBundleID: String? = nil) async -> Bool {
+        guard Self.isAccessibilityTrusted else { return false }
+        let expectedChangeCount = NSPasteboard.general.changeCount
+        for _ in 0..<100 {
+            let flags = CGEventSource.flagsState(.combinedSessionState)
+            if flags.intersection([.maskCommand, .maskControl, .maskAlternate, .maskShift]).isEmpty { break }
+            do { try await Task.sleep(for: .milliseconds(20)) } catch { return false }
+        }
+        guard !Task.isCancelled,
+              CGEventSource.flagsState(.combinedSessionState).intersection([.maskCommand, .maskControl, .maskAlternate, .maskShift]).isEmpty,
+              let target = FocusedTextTarget.capture(),
+              expectedBundleID == nil || target.app.bundleIdentifier == expectedBundleID else { return false }
+        // AXSelectedText setters can report success without changing Chromium/Electron editors.
+        // A normal paste preserves their editing and undo behavior.
+        guard target.isStillFocused, NSPasteboard.general.changeCount == expectedChangeCount,
+              NSPasteboard.general.string(forType: .string) == text else { return false }
+        return Self.postKey(keyCode: 9, flags: .maskCommand)
+    }
+
     static var isAccessibilityTrusted: Bool { AXIsProcessTrusted() }
 
     static func promptForAccessibility() {
@@ -85,30 +106,37 @@ final class Paster {
     /// Returns false when Accessibility permission is missing.
     @discardableResult
     func paste(into app: NSRunningApplication?, charactersAfterCursor: Int? = nil) async -> Bool {
-        guard Self.isAccessibilityTrusted else { return false }
-        if let app, !app.isTerminated {
-            app.activate()
-            for _ in 0..<10 where NSWorkspace.shared.frontmostApplication?.processIdentifier != app.processIdentifier {
-                try? await Task.sleep(for: .milliseconds(30))
-            }
-            try? await Task.sleep(for: .milliseconds(60))
+        guard Self.isAccessibilityTrusted, let app, !app.isTerminated,
+              app.processIdentifier != ProcessInfo.processInfo.processIdentifier else { return false }
+        app.activate()
+        for _ in 0..<10 where NSWorkspace.shared.frontmostApplication?.processIdentifier != app.processIdentifier {
+            do { try await Task.sleep(for: .milliseconds(30)) } catch { return false }
         }
-        Self.postKey(keyCode: 9, flags: .maskCommand) // V
+        do { try await Task.sleep(for: .milliseconds(60)) } catch { return false }
+        guard isTargetFrontmost(app), Self.postKey(keyCode: 9, flags: .maskCommand) else { return false } // V
         if let back = charactersAfterCursor, back > 0 {
-            try? await Task.sleep(for: .milliseconds(80))
-            for _ in 0..<back { Self.postKey(keyCode: 123, flags: []) } // ←
+            do { try await Task.sleep(for: .milliseconds(80)) } catch { return false }
+            for _ in 0..<back {
+                guard isTargetFrontmost(app), Self.postKey(keyCode: 123, flags: []) else { return false }
+            }
         }
         return true
     }
 
-    private static func postKey(keyCode: CGKeyCode, flags: CGEventFlags) {
+    private func isTargetFrontmost(_ app: NSRunningApplication) -> Bool {
+        !Task.isCancelled && !app.isTerminated && NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier
+    }
+
+    @discardableResult
+    private static func postKey(keyCode: CGKeyCode, flags: CGEventFlags) -> Bool {
         let source = CGEventSource(stateID: .combinedSessionState)
         guard let down = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: true),
-              let up = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: false) else { return }
+              let up = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: false) else { return false }
         down.flags = flags
         up.flags = flags
         down.post(tap: .cghidEventTap)
         up.post(tap: .cghidEventTap)
+        return true
     }
 }
 

@@ -26,6 +26,19 @@ final class ActionContext {
         }
     }
 
+    /// Copies first, then inserts into the currently focused input when one is available.
+    func deliverDictation(_ text: String, insert: Bool, expectedBundleID: String? = nil) {
+        paster.write(text: text)
+        notch.close()
+        Task {
+            let inserted = insert ? await paster.insertIntoFocusedInput(text, expectedBundleID: expectedBundleID) : false
+            guard settings.showToasts else { return }
+            notch.showToast(Toast(symbol: inserted ? "checkmark.circle.fill" : "doc.on.clipboard",
+                                  title: inserted ? "Inserted" : "Copied",
+                                  subtitle: inserted || !insert ? String(text.prefix(48)) : "No editable input available · ready to paste"))
+        }
+    }
+
     /// Runs `copy`, then either collapses with a "Copied" toast or pastes into the previous app.
     func perform(paste: Bool, description: String, charactersAfterCursor: Int? = nil, copy: () -> Void) {
         copy()
@@ -40,9 +53,16 @@ final class ActionContext {
             Paster.promptForAccessibility()
             return
         }
-        finish(Toast(symbol: "arrow.down.doc.fill", title: "Pasted into \(appName)", subtitle: description))
         let target = frontmost.previousApp
-        Task { await paster.paste(into: target, charactersAfterCursor: charactersAfterCursor) }
+        notch.close()
+        Task {
+            let pasted = await paster.paste(into: target, charactersAfterCursor: charactersAfterCursor)
+            guard settings.showToasts else { return }
+            notch.showToast(Toast(symbol: pasted ? "arrow.down.doc.fill" : "exclamationmark.triangle.fill",
+                                  title: pasted ? "Pasted into \(appName)" : "Copied · couldn't complete paste",
+                                  subtitle: pasted ? description : "Switch to your app and paste.",
+                                  tint: pasted ? .green : .orange))
+        }
     }
 
     private func finish(_ toast: Toast, duration: Duration = .milliseconds(1400)) {

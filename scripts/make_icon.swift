@@ -1,55 +1,76 @@
 import AppKit
 
-// Draws the MacBud icon: dark squircle, a white notch silhouette at the top, three glowing list rows.
-func render(size: CGFloat) -> NSBitmapImageRep {
-    let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(size), pixelsHigh: Int(size), bitsPerSample: 8,
-                               samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB,
-                               bytesPerRow: 0, bitsPerPixel: 0)!
-    NSGraphicsContext.saveGraphicsState()
-    NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
-    let s = size / 1024
-    let inset = 100 * s
-    let body = CGRect(x: inset, y: inset, width: size - inset * 2, height: size - inset * 2)
-    let squircle = NSBezierPath(roundedRect: body, xRadius: 185 * s, yRadius: 185 * s)
-    let bg = NSGradient(colors: [NSColor(calibratedRed: 0.13, green: 0.14, blue: 0.18, alpha: 1),
-                                 NSColor(calibratedRed: 0.04, green: 0.04, blue: 0.06, alpha: 1)])!
-    bg.draw(in: squircle, angle: -90)
-    // notch
-    let notchW = 300 * s, notchH = 62 * s
-    let notch = CGRect(x: body.midX - notchW / 2, y: body.maxY - notchH, width: notchW, height: notchH)
-    let np = NSBezierPath()
-    np.move(to: CGPoint(x: notch.minX, y: notch.maxY))
-    np.line(to: CGPoint(x: notch.minX, y: notch.minY + 22 * s))
-    np.appendArc(withCenter: CGPoint(x: notch.minX + 22 * s, y: notch.minY + 22 * s), radius: 22 * s, startAngle: 180, endAngle: 270, clockwise: false)
-    np.line(to: CGPoint(x: notch.maxX - 22 * s, y: notch.minY))
-    np.appendArc(withCenter: CGPoint(x: notch.maxX - 22 * s, y: notch.minY + 22 * s), radius: 22 * s, startAngle: 270, endAngle: 360, clockwise: false)
-    np.line(to: CGPoint(x: notch.maxX, y: notch.maxY))
-    np.close()
-    NSColor.white.withAlphaComponent(0.96).setFill(); np.fill()
-    // rows
-    let accent = NSColor(calibratedRed: 0.55, green: 0.72, blue: 1.0, alpha: 1)
-    let rows: [(CGFloat, CGFloat, NSColor)] = [(0.70, 1.0, accent), (0.52, 0.55, .white), (0.36, 0.30, .white)]
-    var y = body.maxY - notchH - 150 * s
-    for (w, alpha, color) in rows {
-        let r = CGRect(x: body.minX + 130 * s, y: y - 56 * s, width: (body.width - 260 * s) * w, height: 56 * s)
-        color.withAlphaComponent(alpha * (color == .white ? 0.9 : 1)).setFill()
-        NSBezierPath(roundedRect: r, xRadius: 28 * s, yRadius: 28 * s).fill()
-        y -= 120 * s
+// Package the user's supplied sunrise artwork into the macOS asset catalog.
+let project = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+let catalog = project.appendingPathComponent("Resources/Assets.xcassets")
+let brand = project.appendingPathComponent("Resources/Brand")
+let appOutput = CommandLine.arguments.dropFirst().first.map { URL(fileURLWithPath: $0) }
+    ?? catalog.appendingPathComponent("AppIcon.appiconset")
+let markOutput = catalog.appendingPathComponent("MacBudMark.imageset")
+let statusOutput = catalog.appendingPathComponent("MacBudStatusIcon.imageset")
+
+func load(_ filename: String) throws -> NSImage {
+    guard let image = NSImage(contentsOf: brand.appendingPathComponent(filename)),
+          image.size.width > 0, image.size.height > 0 else {
+        throw NSError(domain: "MacBudArtwork", code: 1,
+                      userInfo: [NSLocalizedDescriptionKey: "Cannot load artwork \(filename)"])
     }
-    NSGraphicsContext.restoreGraphicsState()
-    return rep
+    return image
 }
 
-let out = URL(fileURLWithPath: CommandLine.arguments[1])
-var contents: [[String: String]] = []
-for pt in [16, 32, 128, 256, 512] {
+func write(_ image: NSImage, pixels: Int, to destination: URL) throws {
+    let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: pixels, pixelsHigh: pixels,
+                                  bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true,
+                                  isPlanar: false, colorSpaceName: .deviceRGB,
+                                  bytesPerRow: 0, bitsPerPixel: 0)!
+    NSGraphicsContext.saveGraphicsState()
+    defer { NSGraphicsContext.restoreGraphicsState() }
+    NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: bitmap)
+    NSGraphicsContext.current?.imageInterpolation = .high
+    let side = CGFloat(pixels)
+    let scale = side / max(image.size.width, image.size.height)
+    let size = NSSize(width: image.size.width * scale, height: image.size.height * scale)
+    let rect = NSRect(x: (side - size.width) / 2, y: (side - size.height) / 2,
+                      width: size.width, height: size.height)
+    image.draw(in: rect, from: .zero, operation: .copy, fraction: 1)
+    try bitmap.representation(using: .png, properties: [:])!.write(to: destination)
+}
+
+func writeContents(_ images: [[String: String]], to directory: URL, template: Bool? = nil) throws {
+    var contents: [String: Any] = ["images": images, "info": ["author": "xcode", "version": 1]]
+    if let template {
+        contents["properties"] = ["template-rendering-intent": template ? "template" : "original"]
+    }
+    try JSONSerialization.data(withJSONObject: contents, options: [.prettyPrinted, .sortedKeys])
+        .write(to: directory.appendingPathComponent("Contents.json"))
+}
+
+let app = try load("MacBud-Sunrise-Cutout.png")
+let mark = app
+for directory in [appOutput, markOutput, statusOutput] {
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+}
+var appContents: [[String: String]] = []
+for points in [16, 32, 128, 256, 512] {
     for scale in [1, 2] {
-        let px = CGFloat(pt * scale)
-        let name = "icon_\(pt)x\(pt)@\(scale)x.png"
-        try! render(size: px).representation(using: .png, properties: [:])!.write(to: out.appendingPathComponent(name))
-        contents.append(["filename": name, "idiom": "mac", "scale": "\(scale)x", "size": "\(pt)x\(pt)"])
+        let name = "icon_\(points)x\(points)@\(scale)x.png"
+        try write(app, pixels: points * scale, to: appOutput.appendingPathComponent(name))
+        appContents.append(["filename": name, "idiom": "mac", "scale": "\(scale)x", "size": "\(points)x\(points)"])
     }
 }
-let json: [String: Any] = ["images": contents, "info": ["author": "xcode", "version": 1]]
-try! JSONSerialization.data(withJSONObject: json, options: [.prettyPrinted, .sortedKeys]).write(to: out.appendingPathComponent("Contents.json"))
-print("icon written")
+try writeContents(appContents, to: appOutput)
+var markContents: [[String: String]] = []
+for scale in [1, 2] {
+    let name = "MacBudMark@\(scale)x.png"
+    try write(mark, pixels: 64 * scale, to: markOutput.appendingPathComponent(name))
+    markContents.append(["filename": name, "idiom": "mac", "scale": "\(scale)x"])
+}
+try writeContents(markContents, to: markOutput, template: false)
+var statusContents: [[String: String]] = []
+for scale in [1, 2] {
+    let name = "MacBudStatusIcon@\(scale)x.png"
+    try write(mark, pixels: 18 * scale, to: statusOutput.appendingPathComponent(name))
+    statusContents.append(["filename": name, "idiom": "mac", "scale": "\(scale)x"])
+}
+try writeContents(statusContents, to: statusOutput, template: true)
+print("Generated transparent app/notch icons and an adaptive monochrome status-bar template.")

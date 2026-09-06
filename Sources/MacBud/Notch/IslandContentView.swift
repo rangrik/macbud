@@ -11,7 +11,7 @@ struct IslandContentView: View {
         let sideWidth = (state.metrics.islandSize.width - notchWidth) / 2
         VStack(spacing: 0) {
             HStack(spacing: 0) {
-                SectionTabs(selected: state.section) { coordinator.select($0) }
+                SectionTabs(sections: coordinator.settings.enabledSections, selected: state.section) { coordinator.select($0) }
                     .padding(.leading, 14)
                     .frame(width: sideWidth, alignment: .leading)
                 Spacer().frame(width: notchWidth)
@@ -21,7 +21,14 @@ struct IslandContentView: View {
             }
             .frame(height: state.geometry.notchRect.height)
 
-            if coordinator.showsWelcome {
+            if !coordinator.hasEnabledSection {
+                VStack(spacing: 12) {
+                    Text("Choose your features").font(.headline)
+                    Text("Enable a section in Settings to show it here.").foregroundStyle(.secondary)
+                    Button("Open Settings") { coordinator.openSettings() }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if coordinator.showsWelcome {
                 WelcomeView(coordinator: coordinator)
             } else {
                 SearchRow(state: state, coordinator: coordinator, focused: $searchFocused)
@@ -41,22 +48,24 @@ struct IslandContentView: View {
         case .clipboard: ClipboardSectionView(controller: coordinator.clipboard)
         case .snippets: SnippetsSectionView(controller: coordinator.snippets)
         case .screenshots: ScreenshotsSectionView(controller: coordinator.screenshots)
+        case .dictationHistory: DictationHistorySectionView(controller: coordinator.dictationHistory)
         }
     }
 }
 
 struct SectionTabs: View {
+    let sections: [Section]
     let selected: Section
     let onSelect: (Section) -> Void
 
     var body: some View {
         GlassEffectContainer(spacing: 6) {
             HStack(spacing: 4) {
-                ForEach(Section.allCases) { section in
+                ForEach(sections) { section in
                     let isSelected = section == selected
+                    Button { onSelect(section) } label: {
                     HStack(spacing: 6) {
-                        Image(systemName: section.symbol)
-                            .font(.system(size: 11.5, weight: .semibold))
+                        FeatureBadge(kind: section.artwork, size: 19)
                         if isSelected {
                             Text(section.title)
                                 .font(.system(size: 11.5, weight: .semibold))
@@ -68,7 +77,10 @@ struct SectionTabs: View {
                     .frame(height: 24)
                     .glassEffect(isSelected ? .regular.tint(.white.opacity(0.16)) : .identity, in: .capsule)
                     .contentShape(Capsule())
-                    .onTapGesture { onSelect(section) }
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(section.title)
+                    .accessibilityAddTraits(isSelected ? .isSelected : [])
                     .help(section.title)
                 }
             }
@@ -82,15 +94,24 @@ struct HeaderStatus: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            if coordinator.settings.clipboardPaused, coordinator.state.section == .clipboard {
-                Label("Paused", systemImage: "pause.fill")
-                    .font(Theme.caption)
-                    .foregroundStyle(Theme.warning)
+            if coordinator.settings.isEnabled(.keepAwake) {
+            HStack(spacing: 5) {
+                FeatureBadge(kind: .keepAwake, size: 21)
+                Text("Keep Alive")
+                Toggle("Keep Alive", isOn: Binding(
+                    get: { coordinator.keepAwake.isActive },
+                    set: { coordinator.keepAwake.setEnabled($0) }
+                ))
+                .labelsHidden()
+                .toggleStyle(.switch)
+                .controlSize(.mini)
+                .fixedSize()
+                .help(coordinator.keepAwake.errorMessage ?? "Keep your Mac awake until you turn this off")
+                .accessibilityIdentifier("keepAwakeToggle")
             }
-            Text("\(coordinator.activeResultCount) \(coordinator.activeResultCount == 1 ? "item" : "items")")
-                .font(Theme.caption)
-                .foregroundStyle(Theme.textTertiary)
-                .monospacedDigit()
+            .font(.system(size: 11, weight: .medium))
+            .foregroundStyle(Theme.textSecondary)
+            }
         }
     }
 }
@@ -119,12 +140,7 @@ struct SearchRow: View {
                 .focused(focused)
                 .disabled(coordinator.snippets.isEditing && state.section == .snippets)
             }
-            if !state.query.isEmpty {
-                Text("\(coordinator.activeResultCount) results")
-                    .font(Theme.caption)
-                    .foregroundStyle(Theme.textTertiary)
-                    .monospacedDigit()
-            }
+
         }
         .padding(.horizontal, 20)
         .frame(height: 46)
@@ -139,7 +155,9 @@ struct FooterBar: View {
         HStack(spacing: 14) {
             ForEach(coordinator.footerHints()) { hint in
                 if let command = hint.command {
-                    Button { coordinator.handle(command) } label: { KeyHint(keys: hint.keys, label: hint.label) }
+                    Button { coordinator.handle(command) } label: {
+                        KeyHint(keys: hint.keys, label: hint.label, systemImage: hint.systemImage)
+                    }
                         .buttonStyle(FooterHintButtonStyle())
                         .help("Click to \(hint.label.lowercased())")
                 } else {
@@ -237,9 +255,7 @@ struct WelcomeView: View {
         let hotKey = coordinator.hotKeys?.effectiveToggle?.displayString ?? HotKey.defaultToggle.displayString
         VStack(spacing: 18) {
             Spacer(minLength: 8)
-            Image(systemName: "rectangle.topthird.inset.filled")
-                .font(.system(size: 34, weight: .medium))
-                .foregroundStyle(Theme.accent)
+            MacBudMark(size: 48)
             VStack(spacing: 6) {
                 Text("MacBud lives in your notch")
                     .font(.system(size: 20, weight: .semibold))
@@ -249,11 +265,11 @@ struct WelcomeView: View {
                     .foregroundStyle(Theme.textSecondary)
             }
             HStack(alignment: .top, spacing: 26) {
-                WelcomeStep(symbol: "doc.on.clipboard", title: "Clipboard",
+                WelcomeStep(artwork: .clipboard, title: "Clipboard",
                             text: "Everything you copy is captured. When macOS asks, choose “Always Allow” so history keeps flowing.")
-                WelcomeStep(symbol: "text.badge.checkmark", title: "Snippets",
+                WelcomeStep(artwork: .snippets, title: "Snippets",
                             text: "Saved text you paste often. Placeholders like {date} and {clipboard} expand when used.")
-                WelcomeStep(symbol: "photo.on.rectangle.angled", title: "Screenshots",
+                WelcomeStep(artwork: .screenshots, title: "Screenshots",
                             text: "Browse \(coordinator.settings.screenshotFolders.first.map { ($0 as NSString).lastPathComponent } ?? "Desktop") and copy any image or video. Add folders in Settings (⌘,).")
             }
             .padding(.horizontal, 36)
@@ -272,13 +288,13 @@ struct WelcomeView: View {
 }
 
 private struct WelcomeStep: View {
-    let symbol: String
+    let artwork: FeatureArt
     let title: String
     let text: String
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Image(systemName: symbol).font(.system(size: 16, weight: .medium)).foregroundStyle(Theme.textPrimary)
+            FeatureBadge(kind: artwork, size: 25)
             Text(title).font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.textPrimary)
             Text(text).font(.system(size: 11.5)).foregroundStyle(Theme.textSecondary).fixedSize(horizontal: false, vertical: true)
         }

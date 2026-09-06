@@ -66,6 +66,7 @@ final class ClipboardSectionController {
             store.togglePin(item.id)
             if let index = results.firstIndex(where: { $0.item.id == item.id }) { selectedIndex = index }
         case .saveAsSnippet:
+            guard context.settings.isEnabled(.snippets) else { return false }
             guard let item = selected, let text = item.text else { context.showHint("Only text can become a snippet"); return true }
             snippets?.beginNew(content: text)
             context.state.section = .snippets

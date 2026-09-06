@@ -28,10 +28,18 @@ final class AppSettings {
     var clipboardPaused = false { didSet { set(clipboardPaused, "clipboardPaused") } }
     var keyBindings: KeyBindings = .defaults { didSet { setCodable(keyBindings, "keyBindings") } }
     var dictationHotKey: HotKey? = .defaultDictation { didSet { setCodable(dictationHotKey, "dictationHotKey") } }
+    var holdToTalkHotKey: HotKey? = .defaultHoldToTalk { didSet { setCodable(holdToTalkHotKey, "holdToTalkHotKey") } }
+    var hasMigratedDictationHistory = false { didSet { set(hasMigratedDictationHistory, "hasMigratedDictationHistory") } }
     /// Locale identifier for dictation; empty means "follow the system language".
     var dictationLocale = "" { didSet { set(dictationLocale, "dictationLocale") } }
     var showNotchTab = true { didSet { set(showNotchTab, "showNotchTab") } }
     var hasConfiguredLaunchAtLogin = false { didSet { set(hasConfiguredLaunchAtLogin, "hasConfiguredLaunchAtLogin") } }
+    private(set) var sectionOrder: [Section] = Section.allCases {
+        didSet { set(sectionOrder.map(\.rawValue), "sectionOrder") }
+    }
+    private(set) var disabledFeatures: Set<AppFeature> = [] {
+        didSet { set(disabledFeatures.map(\.rawValue).sorted(), "disabledFeatures") }
+    }
 
     static let defaultSectionHotKeys: [Section: HotKey] = [
         .clipboard: HotKey(keyCode: UInt16(kVK_ANSI_V), modifiers: [.option, .shift]),
@@ -57,6 +65,8 @@ final class AppSettings {
         sectionHotKeys = defaults.object(forKey: "sectionHotKeys") == nil ? Self.defaultSectionHotKeys : (codable([Section: HotKey].self, "sectionHotKeys") ?? [:])
         keyBindings = codable(KeyBindings.self, "keyBindings") ?? .defaults
         dictationHotKey = defaults.object(forKey: "dictationHotKey") == nil ? .defaultDictation : codable(HotKey.self, "dictationHotKey")
+        holdToTalkHotKey = defaults.object(forKey: "holdToTalkHotKey") == nil ? .defaultHoldToTalk : codable(HotKey.self, "holdToTalkHotKey")
+        hasMigratedDictationHistory = defaults.bool(forKey: "hasMigratedDictationHistory")
         dictationLocale = defaults.string(forKey: "dictationLocale") ?? ""
         showNotchTab = defaults.object(forKey: "showNotchTab") as? Bool ?? true
         hasConfiguredLaunchAtLogin = defaults.bool(forKey: "hasConfiguredLaunchAtLogin")
@@ -64,7 +74,29 @@ final class AppSettings {
         lastSection = defaults.string(forKey: "lastSection").flatMap(Section.init(rawValue:)) ?? .clipboard
         hasSeenWelcome = defaults.bool(forKey: "hasSeenWelcome")
         clipboardPaused = defaults.bool(forKey: "clipboardPaused")
+        sectionOrder = Self.normalizedSectionOrder((defaults.stringArray(forKey: "sectionOrder") ?? []).compactMap(Section.init(rawValue:)))
+        disabledFeatures = Set((defaults.stringArray(forKey: "disabledFeatures") ?? []).compactMap(AppFeature.init(rawValue:)))
         isLoading = false
+    }
+
+    var enabledSections: [Section] { sectionOrder.filter { isEnabled($0.feature) } }
+
+    func isEnabled(_ feature: AppFeature) -> Bool { !disabledFeatures.contains(feature) }
+
+    func setEnabled(_ enabled: Bool, for feature: AppFeature) {
+        if enabled { disabledFeatures.remove(feature) } else { disabledFeatures.insert(feature) }
+    }
+
+    func setSectionOrder(_ sections: [Section]) { sectionOrder = Self.normalizedSectionOrder(sections) }
+
+    func moveSection(_ section: Section, by offset: Int) {
+        guard let index = sectionOrder.firstIndex(of: section), sectionOrder.indices.contains(index + offset) else { return }
+        sectionOrder.swapAt(index, index + offset)
+    }
+
+    private static func normalizedSectionOrder(_ sections: [Section]) -> [Section] {
+        var seen: Set<Section> = []
+        return (sections + Section.allCases).filter { seen.insert($0).inserted }
     }
 
     var screenshotFolderURLs: [URL] { screenshotFolders.map { URL(fileURLWithPath: ($0 as NSString).expandingTildeInPath, isDirectory: true) } }

@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="0.7" y2="1"><stop stop-color="#424A4D"/><stop offset="0.4" stop-color="#262D31"/><stop offset="1" stop-color="#181E21"/></linearGradient>
+    <linearGradient id="rim" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#646E71"/><stop offset="0.5" stop-color="#313A3E"/><stop offset="1" stop-color="#10171A"/></linearGradient>
+    <linearGradient id="silver" x1="0" y1="0" x2="0.7" y2="1"><stop stop-color="#F4F6F4"/><stop offset="0.45" stop-color="#DDE3E2"/><stop offset="1" stop-color="#A8B6B7"/></linearGradient>
+    <linearGradient id="teal" x1="0" y1="0" x2="0.7" y2="1"><stop stop-color="#A3C3C1"/><stop offset="0.45" stop-color="#7EA6A5"/><stop offset="1" stop-color="#527779"/></linearGradient>
+    <linearGradient id="edge" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#697F82"/><stop offset="1" stop-color="#2A4145"/></linearGradient>
+  </defs>
+  <g id="App-tile">
+    <rect id="Tile-shadow" x="98" y="110" width="828" height="830" rx="192" fill="#000000" fill-opacity="0.16"/>
+    <rect id="Tile-bevel" x="96" y="96" width="832" height="832" rx="188" fill="url(#rim)"/>
+    <rect id="Tile-face" x="104" y="103" width="816" height="810" rx="181" fill="url(#tile)"/>
+    <path id="Tile-highlight" d="M121 235Q136 117 280 109H744Q839 109 883 180" fill="none" stroke="#AFB9BA" stroke-opacity="0.20" stroke-width="2"/>
+  </g>
+  <g id="Monogram">
+    <path id="Cast-shadow" d="M280 704V320H384L512 454L640 320H744V704H640V463L512 594L384 463V704Z" transform="translate(24 43)" fill="#000000" fill-opacity="0.28"/>
+    <path id="Extrusion" d="M280 704V320H384L512 454L640 320H744V704H640V463L512 594L384 463V704Z" transform="translate(17 25)" fill="url(#edge)"/>
+    <path id="Neutral-face" d="M280 704V320H384L512 454V594L384 463V704Z" fill="url(#silver)"/>
+    <path id="Accent-face" d="M744 704V320H640L512 454V594L640 463V704Z" fill="url(#teal)"/>
+    <path id="Top-bevel" d="M283 697V323H382L512 459L642 323H741" fill="none" stroke="#FFFFFF" stroke-opacity="0.40" stroke-width="4" stroke-linejoin="round"/>
+    <path id="Cut-bevel" d="M385 468L512 598L638 468" fill="none" stroke="#152C32" stroke-opacity="0.28" stroke-width="4"/>
+  </g>
+</svg>

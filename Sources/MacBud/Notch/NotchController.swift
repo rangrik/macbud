@@ -41,13 +41,14 @@ final class NotchController {
     }
 
     func install() {
-        let panelHost = NSHostingView(rootView: NotchRootView(state: state, controller: self, content: contentProvider, dictation: dictationProvider))
+        let panelHost = NotchHostingView(rootView: NotchRootView(state: state, controller: self, content: contentProvider, dictation: dictationProvider))
         panelHost.sizingOptions = []
         panel.contentView = panelHost
         panel.keyHandler = { [weak self] event in self?.keyHandler?(event) ?? false }
         self.panelHost = panelHost
 
         let baseHost = ClickableHostingView(rootView: NotchBaseView(state: state, controller: self))
+        baseHost.sizingOptions = []
         baseHost.sizingOptions = []
         baseHost.onClick = { [weak self] in self?.tabClicked() }
         baseHost.onHoverChange = { [weak self] hovering in self?.state.tabHovered = hovering }
@@ -93,16 +94,15 @@ final class NotchController {
         applyBaseFrame()
         state.wantsSearchFocus = false
         state.footerHint = nil
-        // Animate inside the larger frame, then shrink the window so the desktop around the pill stays clickable.
-        panel.setFrame(state.metrics.expandedWindowFrame(for: state.geometry), display: false)
+        // Set the final canvas before showing it; resizing after the animation moved the contents sideways.
+        // Dictation is an overlay: the target app keeps its insertion point and ordinary keyboard input.
+        panel.acceptsKeyboardFocus = false
+        state.panelUsesDictationSize = true
+        panel.setFrame(state.metrics.dictationWindowFrame(for: state.geometry), display: false)
+        base.orderOut(nil)
         panel.orderFrontRegardless()
-        panel.makeKey()
         withAnimation(Self.openAnimation) { state.phase = .dictation }
-        collapseTask = Task { [weak self] in
-            try? await Task.sleep(for: .milliseconds(420))
-            guard !Task.isCancelled, let self, self.state.isDictating else { return }
-            self.panel.setFrame(self.state.metrics.dictationWindowFrame(for: self.state.geometry), display: true)
-        }
+        if panel.isKeyWindow { panel.resignKey() }
         Trace.log("openDictation key=\(panel.isKeyWindow)")
     }
 
@@ -118,6 +118,8 @@ final class NotchController {
         state.footerHint = nil
         willOpen?()
 
+        panel.acceptsKeyboardFocus = true
+        state.panelUsesDictationSize = false
         panel.setFrame(state.metrics.expandedWindowFrame(for: state.geometry), display: false)
         panel.orderFrontRegardless()
         panel.makeKey()
@@ -131,6 +133,9 @@ final class NotchController {
         guard state.isOpen else { return }
         state.wantsSearchFocus = false
         withAnimation(Self.closeAnimation) { state.phase = .collapsed }
+        // Return the key focus immediately, before any paste or the closing animation completes.
+        if panel.isKeyWindow { panel.resignKey() }
+        base.orderFrontRegardless()
         collapseTask?.cancel()
         collapseTask = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(280))
@@ -149,6 +154,8 @@ final class NotchController {
     }
 
     func showToast(_ toast: Toast, duration: Duration = .milliseconds(1400)) {
+        guard !state.isOpen else { return }
+        base.orderFrontRegardless()
         toastTask?.cancel()
         state.toast = toast
         applyBaseFrame(phase: .toast)
@@ -190,16 +197,18 @@ final class NotchController {
             let w = s.width + state.metrics.topFillet * 2
             frame = CGRect(x: g.notchCenterX - w / 2, y: g.topY - s.height, width: w, height: s.height)
         }
+        state.baseCanvasSize = frame.size
         base.setFrame(frame, display: true)
         base.ignoresMouseEvents = !g.hasPhysicalNotch
         let grow = phase == .idle && showsTab ? state.metrics.tabHoverGrowth : .zero
         baseHost?.hitInsets = NSEdgeInsets(top: 0, left: grow.width, bottom: grow.height, right: grow.width)
     }
 
-    private func panelDidResignKey() {
-        // Clicking anywhere else (or another app grabbing focus) dismisses the island.
+    func panelDidResignKey() {
+        // Dictation must survive app switches and microphone permission prompts.
+        // Only the ordinary expanded tabs dismiss when focus moves elsewhere.
         Trace.log("panel resigned key; expanded=\(state.isExpanded) frontmost=\(NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "-") active=\(NSApp.isActive)")
-        if state.isOpen, !isSnapshotting { close() }
+        if state.isExpanded, !isSnapshotting { close() }
     }
 
     // MARK: - Automation support
@@ -228,6 +237,11 @@ final class NotchController {
     }
 
     enum WindowKind: String { case panel, base }
+}
+
+/// Buttons in the passive dictation overlay work on the first click without taking input focus.
+final class NotchHostingView<Content: View>: NSHostingView<Content> {
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 }
 
 /// Always-on window that sits exactly over the notch. Never becomes key.

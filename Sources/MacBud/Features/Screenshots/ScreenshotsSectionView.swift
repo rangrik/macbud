@@ -21,7 +21,7 @@ struct ScreenshotsSectionView: View {
             }
         } else {
             VStack(spacing: 0) {
-                MediaPreview(item: controller.selected, position: controller.selectedIndex + 1, total: results.count)
+                MediaPreview(item: controller.selected)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 Rectangle().fill(Theme.separator).frame(height: 1)
                 Filmstrip(items: results, selectedIndex: controller.selectedIndex,
@@ -120,8 +120,6 @@ struct ThumbnailCell: View {
 
 struct MediaPreview: View {
     let item: MediaItem?
-    var position: Int = 0
-    var total: Int = 0
     @State private var image: NSImage?
     @State private var details = ""
 
@@ -155,7 +153,6 @@ struct MediaPreview: View {
                     Text("·")
                     Text(details).lineLimit(1)
                     Spacer()
-                    if total > 0 { Text("\(position) of \(total)").monospacedDigit(); Text("·") }
                     Label(item.folderName, systemImage: "folder")
                 }
                 .font(Theme.caption)

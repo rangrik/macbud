@@ -26,6 +26,7 @@ targets:
       - path: Sources/MacBud
         excludes: ["**/*.entitlements"]
       - path: Resources
+        excludes: ["Brand"]
     info:
       path: Sources/MacBud/Info.plist
       properties:

@@ -41,7 +41,7 @@ nonisolated struct NotchGeometry: Equatable, Sendable {
 nonisolated struct NotchMetrics: Equatable, Sendable {
     var islandSize = CGSize(width: 760, height: 500)
     var toastSize = CGSize(width: 300, height: 76)
-    var dictationSize = CGSize(width: 560, height: 132)
+    var dictationSize = CGSize(width: 560, height: 238)
     /// How far the idle tab extends beyond the notch on each side (icon plus comfortable padding).
     var tabExtension: CGFloat = 42
     /// How much the whole tab grows on hover: per side horizontally, and downwards.

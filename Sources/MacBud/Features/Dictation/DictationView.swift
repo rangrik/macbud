@@ -1,111 +1,123 @@
 import SwiftUI
 
-/// Compact dictation pill under the notch: live transcript, level meter, timer and key hints.
+/// A passive recording overlay: waveform, transcript, then the same quiet action strip as the island.
 struct DictationView: View {
     let controller: DictationController
     let settings: AppSettings
     let notchHeight: CGFloat
+    var holdingToTalk = false
+    var shortcut: String?
 
     var body: some View {
-        let enterPastes = settings.enterAction == .paste
         VStack(spacing: 0) {
-            Spacer().frame(height: notchHeight)
-            HStack(alignment: .center, spacing: 14) {
-                indicator
-                    .frame(width: 34, height: 34)
-                VStack(alignment: .leading, spacing: 6) {
-                    transcriptText
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    HStack(spacing: 10) {
-                        Text(timerText)
-                            .font(.system(size: 11, weight: .medium, design: .rounded).monospacedDigit())
-                            .foregroundStyle(Theme.textSecondary)
-                        LevelMeter(levels: controller.levels, active: controller.phase == .recording)
-                            .frame(width: 120, height: 14)
-                        if let locale = controller.locale {
-                            Text(locale.localizedString(forIdentifier: locale.identifier) ?? locale.identifier)
-                                .font(Theme.caption)
-                                .foregroundStyle(Theme.textTertiary)
-                                .lineLimit(1)
-                        }
-                    }
+            Color.clear.frame(height: notchHeight + 6)
+            LevelMeter(levels: controller.levels, active: controller.phase == .recording)
+                .frame(height: 32).padding(.horizontal, 20)
+            HStack(spacing: 8) {
+                Text(status).font(Theme.caption).foregroundStyle(Theme.textSecondary)
+                if isPreparing || controller.phase == .finalizing {
+                    ProgressView().controlSize(.mini).tint(.white)
                 }
-                VStack(alignment: .leading, spacing: 5) {
-                    switch controller.phase {
-                    case .failed:
-                        KeyHint(keys: "↩", label: "Retry", emphasized: true)
-                        KeyHint(keys: "esc", label: "Discard")
-                    default:
-                        KeyHint(keys: "↩", label: enterPastes ? "Insert" : "Copy", emphasized: true)
-                        KeyHint(keys: "⌘↩", label: enterPastes ? "Copy" : "Insert")
-                        KeyHint(keys: "esc", label: "Cancel")
-                    }
-                }
-                .fixedSize()
+                Spacer()
+                Text("On-device").font(Theme.caption).foregroundStyle(Theme.textTertiary)
+                Text(timerText).font(.system(size: 11, design: .monospaced)).foregroundStyle(Theme.textSecondary)
             }
-            .padding(.horizontal, 18)
-            .padding(.vertical, 12)
+            .padding(.horizontal, 20).padding(.top, 5)
+
+            ScrollViewReader { proxy in
+                ScrollView(.vertical) {
+                    VStack(alignment: .leading, spacing: 0) {
+                        Text(displayText)
+                            .font(.system(size: 14)).foregroundStyle(transcriptColor)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, 20).padding(.vertical, 12)
+                        Color.clear.frame(height: 1).id("transcript-end")
+                    }
+                }
+                // Wait for the measured scroll range to change so new wrapped lines are laid out.
+                .onScrollGeometryChange(for: CGFloat.self) { geometry in
+                    geometry.contentSize.height - geometry.containerSize.height
+                } action: { _, _ in
+                    proxy.scrollTo("transcript-end", anchor: .bottom)
+                }
+                .onChange(of: controller.transcript) { _, _ in proxy.scrollTo("transcript-end", anchor: .bottom) }
+            }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-        }
-    }
-
-    @ViewBuilder private var indicator: some View {
-        switch controller.phase {
-        case .recording:
-            ZStack {
-                Circle().fill(Color.red.opacity(0.18))
-                Circle().fill(Color.red).frame(width: 12, height: 12)
-                    .symbolEffect(.pulse)
-                Image(systemName: "mic.fill").font(.system(size: 13, weight: .semibold)).foregroundStyle(.white).opacity(0.0)
+            Rectangle().fill(Theme.separator).frame(height: 1)
+            HStack(spacing: 12) {
+                if holdingToTalk, controller.phase == .recording {
+                    Text("Release to insert").font(Theme.caption).foregroundStyle(Theme.textTertiary)
+                }
+                Spacer(minLength: 0)
+                switch controller.phase {
+                case .recording:
+                    action("Copy", systemImage: "doc.on.doc") { controller.finish(.copy) }
+                    action("Insert", keys: holdingToTalk ? "" : (shortcut ?? settings.dictationHotKey?.displayString ?? "")) {
+                        controller.finish(.insert)
+                    }
+                    action("Cancel", keys: "⎋") { controller.cancel() }
+                case .failed:
+                    action("Retry") { controller.retry() }.disabled(!controller.canRetry)
+                    action("Discard", keys: "⎋") { controller.cancel() }
+                case .preparing, .finalizing:
+                    action("Cancel", keys: "⎋") { controller.cancel() }
+                case .idle: EmptyView()
+                }
             }
-        case .finalizing, .preparing:
-            ProgressView().controlSize(.small).tint(.white)
-        case .failed:
-            Image(systemName: "exclamationmark.triangle.fill").font(.system(size: 18)).foregroundStyle(Theme.warning)
-        case .idle:
-            Image(systemName: "mic").font(.system(size: 18)).foregroundStyle(Theme.textSecondary)
+            .padding(.horizontal, 16).frame(height: 38)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
 
-    @ViewBuilder private var transcriptText: some View {
+    private func action(_ title: String, keys: String = "", systemImage: String? = nil, perform: @escaping () -> Void) -> some View {
+        Button(action: perform) { KeyHint(keys: keys, label: title, systemImage: systemImage) }
+            .buttonStyle(FooterHintButtonStyle())
+            .accessibilityLabel(title)
+    }
+
+    private var isPreparing: Bool { if case .preparing = controller.phase { true } else { false } }
+    private var status: String {
         switch controller.phase {
-        case .preparing(let message):
-            Text(message).font(Theme.body).foregroundStyle(Theme.textSecondary)
-        case .failed(let message):
-            Text(message).font(.system(size: 12)).foregroundStyle(Theme.warning).lineLimit(2)
-        case .finalizing:
-            Text(controller.transcript.isEmpty ? "Finishing…" : controller.transcript)
-                .font(Theme.body).foregroundStyle(Theme.textSecondary).lineLimit(2).truncationMode(.head)
-        case .recording, .idle:
-            if controller.transcript.isEmpty {
-                Text("Listening… start talking").font(Theme.body).foregroundStyle(Theme.textTertiary)
-            } else {
-                Text(controller.transcript)
-                    .font(Theme.body).foregroundStyle(Theme.textPrimary)
-                    .lineLimit(2).truncationMode(.head)
-            }
+        case .recording: "Listening"
+        case .preparing: "Preparing"
+        case .finalizing: "Finishing"
+        case .failed: "Recording paused"
+        case .idle: "Dictation"
         }
     }
-
+    private var displayText: String {
+        switch controller.phase {
+        case .preparing(let message), .failed(let message): message
+        case .finalizing: controller.transcript.isEmpty ? "Finishing your recording…" : controller.transcript
+        case .recording, .idle: controller.transcript.isEmpty ? "Start talking…" : controller.transcript
+        }
+    }
+    private var transcriptColor: Color {
+        if case .failed = controller.phase { return Theme.warning }
+        return controller.transcript.isEmpty ? Theme.textTertiary : Theme.textPrimary
+    }
     private var timerText: String {
         let total = Int(controller.elapsed)
-        return String(format: "%d:%02d", total / 60, total % 60)
+        return String(format: "%02d:%02d", total / 60, total % 60)
     }
 }
 
-/// Bars that follow the recent microphone level, newest on the right.
 struct LevelMeter: View {
     let levels: [Float]
     let active: Bool
 
     var body: some View {
-        HStack(alignment: .center, spacing: 2) {
-            ForEach(Array(levels.enumerated()), id: \.offset) { _, level in
-                RoundedRectangle(cornerRadius: 1)
-                    .fill(active ? Color.red.opacity(0.85) : Theme.textTertiary)
-                    .frame(width: 2.4, height: max(2, CGFloat(level) * 14))
+        Canvas { context, size in
+            let bars = max(1, Int(size.width / 4))
+            for index in 0..<bars {
+                let sample = levels.isEmpty ? Float(0) : levels[min(levels.count - 1, index * levels.count / bars)]
+                let height = max(2, CGFloat(sample) * size.height)
+                let rect = CGRect(x: CGFloat(index) * size.width / CGFloat(bars), y: (size.height - height) / 2,
+                                  width: 2, height: height)
+                context.fill(Path(roundedRect: rect, cornerRadius: 1),
+                             with: .color(active ? Color(red: 0.76, green: 0.57, blue: 1) : Theme.textTertiary))
             }
         }
-        .animation(.linear(duration: 0.08), value: levels)
+        .accessibilityLabel("Microphone level")
     }
 }

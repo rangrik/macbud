@@ -1,7 +1,7 @@
 import SwiftUI
 
 nonisolated enum Section: String, CaseIterable, Codable, Identifiable, Sendable {
-    case clipboard, snippets, screenshots
+    case clipboard, snippets, screenshots, dictationHistory
 
     var id: String { rawValue }
     var title: String {
@@ -9,6 +9,7 @@ nonisolated enum Section: String, CaseIterable, Codable, Identifiable, Sendable 
         case .clipboard: "Clipboard"
         case .snippets: "Snippets"
         case .screenshots: "Screenshots"
+        case .dictationHistory: "History"
         }
     }
     var symbol: String {
@@ -16,9 +17,10 @@ nonisolated enum Section: String, CaseIterable, Codable, Identifiable, Sendable 
         case .clipboard: "doc.on.clipboard"
         case .snippets: "text.badge.checkmark"
         case .screenshots: "photo.on.rectangle.angled"
+        case .dictationHistory: "clock"
         }
     }
-    var searchPlaceholder: String { "Search \(title.lowercased())…" }
+    var searchPlaceholder: String { self == .dictationHistory ? "Search dictation history…" : "Search \(title.lowercased())…" }
     var index: Int { Section.allCases.firstIndex(of: self) ?? 0 }
     var next: Section { Section.allCases[(index + 1) % Section.allCases.count] }
     var previous: Section { Section.allCases[(index + Section.allCases.count - 1) % Section.allCases.count] }
@@ -38,6 +40,9 @@ struct Toast: Equatable, Sendable {
 @Observable
 final class NotchState {
     var phase: NotchPhase = .collapsed
+    /// Keep the last panel canvas during collapse; SwiftUI must never negotiate a new window size.
+    var panelUsesDictationSize = false
+    var baseCanvasSize: CGSize
     var basePhase: BasePhase = .idle
     var section: Section = .clipboard
     var query = ""
@@ -52,9 +57,13 @@ final class NotchState {
     var showsNotchTab = true
     /// Small status glyph shown in the idle tab (e.g. "pause.fill" while capture is paused).
     var notchStatusSymbol: String?
+    var keepsAwake = false
     var tabHovered = false
 
-    init(geometry: NotchGeometry) { self.geometry = geometry }
+    init(geometry: NotchGeometry) {
+        self.geometry = geometry
+        baseCanvasSize = geometry.notchRect.size
+    }
 
     var isExpanded: Bool { phase == .expanded }
     var isDictating: Bool { phase == .dictation }

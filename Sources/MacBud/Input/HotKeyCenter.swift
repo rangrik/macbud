@@ -19,6 +19,8 @@ final class HotKeyCenter {
     static let shared = HotKeyCenter()
 
     private var handlers: [UInt32: () -> Void] = [:]
+    private var releaseHandlers: [UInt32: () -> Void] = [:]
+    private var pressed: Set<UInt32> = []
     private var refs: [UInt32: EventHotKeyRef] = [:]
     private var eventHandler: EventHandlerRef?
     private var nextID: UInt32 = 1
@@ -27,7 +29,7 @@ final class HotKeyCenter {
     private init() {}
 
     @discardableResult
-    func register(_ hotKey: HotKey, handler: @escaping () -> Void) throws -> UInt32 {
+    func register(_ hotKey: HotKey, onRelease: (() -> Void)? = nil, handler: @escaping () -> Void) throws -> UInt32 {
         installEventHandlerIfNeeded()
         let id = nextID
         nextID += 1
@@ -41,6 +43,7 @@ final class HotKeyCenter {
         }
         refs[id] = ref
         handlers[id] = handler
+        releaseHandlers[id] = onRelease
         Log.input.info("registered hotkey \(hotKey.displayString) id=\(id)")
         return id
     }
@@ -48,20 +51,29 @@ final class HotKeyCenter {
     func unregister(id: UInt32) {
         if let ref = refs.removeValue(forKey: id) { UnregisterEventHotKey(ref) }
         handlers.removeValue(forKey: id)
+        releaseHandlers.removeValue(forKey: id)
+        pressed.remove(id)
     }
 
     func unregisterAll() {
         for id in Array(refs.keys) { unregister(id: id) }
     }
 
-    fileprivate func fire(id: UInt32) {
-        handlers[id]?()
+    func fire(id: UInt32, released: Bool = false) {
+        if released {
+            guard pressed.remove(id) != nil else { return }
+            releaseHandlers[id]?()
+        } else if pressed.insert(id).inserted {
+            handlers[id]?()
+        }
     }
 
     private func installEventHandlerIfNeeded() {
         guard eventHandler == nil else { return }
-        var spec = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
-        InstallEventHandler(GetApplicationEventTarget(), hotKeyEventCallback, 1, &spec, nil, &eventHandler)
+        var specs = [kEventHotKeyPressed, kEventHotKeyReleased].map {
+            EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32($0))
+        }
+        InstallEventHandler(GetApplicationEventTarget(), hotKeyEventCallback, specs.count, &specs, nil, &eventHandler)
     }
 }
 
@@ -72,6 +84,7 @@ private nonisolated func hotKeyEventCallback(_ next: EventHandlerCallRef?, _ eve
     let status = GetEventParameter(event, EventParamName(kEventParamDirectObject), EventParamType(typeEventHotKeyID),
                                    nil, MemoryLayout<EventHotKeyID>.size, nil, &hotKeyID)
     guard status == noErr else { return status }
-    MainActor.assumeIsolated { HotKeyCenter.shared.fire(id: hotKeyID.id) }
+    let released = GetEventKind(event) == UInt32(kEventHotKeyReleased)
+    MainActor.assumeIsolated { HotKeyCenter.shared.fire(id: hotKeyID.id, released: released) }
     return noErr
 }

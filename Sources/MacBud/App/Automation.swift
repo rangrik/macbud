@@ -61,7 +61,9 @@ enum Automation {
             }
         case "dump":
             guard let path = params["path"] else { return }
-            let dump = app.coordinator.dump()
+            var dump = app.coordinator.dump()
+            dump["clipboardCaptureRunning"] = app.clipboardCaptureRunning
+            dump["screenshotIndexingEnabled"] = app.library.isEnabled
             if let data = try? JSONSerialization.data(withJSONObject: dump, options: [.prettyPrinted, .sortedKeys]) {
                 try? data.write(to: URL(fileURLWithPath: path))
             }
@@ -70,7 +72,7 @@ enum Automation {
         case "dictate":
             app.coordinator.startDictation()
         case "dictate-file":
-            guard let path = params["path"] else { return }
+            guard app.settings.isEnabled(.dictation), let path = params["path"] else { return }
             app.coordinator.frontmost.capture()
             app.notch.openDictation()
             app.coordinator.dictation.transcribeFile(URL(fileURLWithPath: path), paste: params["paste"] == "1")
@@ -78,6 +80,15 @@ enum Automation {
             app.coordinator.dictation.finish(paste: params["paste"] == "1")
         case "dictate-cancel":
             app.coordinator.dictation.cancel()
+        case "dictate-retry":
+            app.coordinator.dictation.retry()
+        case "dictate-delivery-check":
+            // Restrict synthetic delivery checks to a named local test app even if focus changes.
+            guard let text = params["text"], let target = params["target"] else { return }
+            app.coordinator.context.deliverDictation(text, insert: true, expectedBundleID: target)
+        case "keep-awake":
+            guard app.settings.isEnabled(.keepAwake) else { return }
+            app.coordinator.keepAwake.setEnabled(params["enabled"] == "1")
         default:
             Log.app.error("unknown automation command \(command)")
         }

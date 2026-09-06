@@ -43,14 +43,23 @@ struct KeyHint: View {
     let keys: String
     let label: String
     var emphasized = false
+    var systemImage: String?
 
     var body: some View {
         HStack(spacing: 5) {
-            Text(keys)
-                .font(.system(size: 10.5, weight: .semibold, design: .rounded))
-                .foregroundStyle(emphasized ? Theme.textPrimary : Theme.textSecondary)
-                .padding(.horizontal, 5).padding(.vertical, 2)
-                .background(Theme.chipFill, in: RoundedRectangle(cornerRadius: 4))
+            if !keys.isEmpty {
+                Text(keys)
+                    .font(.system(size: 10.5, weight: .semibold, design: .rounded))
+                    .foregroundStyle(emphasized ? Theme.textPrimary : Theme.textSecondary)
+                    .padding(.horizontal, 5).padding(.vertical, 2)
+                    .background(Theme.chipFill, in: RoundedRectangle(cornerRadius: 4))
+            }
+            if let systemImage {
+                Image(systemName: systemImage)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(Theme.textSecondary)
+                    .accessibilityHidden(true)
+            }
             Text(label)
                 .font(.system(size: 11))
                 .foregroundStyle(emphasized ? Theme.textSecondary : Theme.textTertiary)

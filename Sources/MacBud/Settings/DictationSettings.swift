@@ -30,7 +30,12 @@ struct DictationSettings: View {
             }
             SwiftUI.Section("How it works") {
                 LabeledContent("Start") { Text(settings.dictationHotKey?.displayString ?? "No shortcut set — add one in Shortcuts") }
-                LabeledContent("While recording") { Text("↩ \(settings.enterAction == .paste ? "inserts into the active app" : "copies to the clipboard") · ⌘↩ does the other · esc cancels") }
+                LabeledContent("Hold to talk") { Text(settings.holdToTalkHotKey?.displayString ?? "Set in Shortcuts") }
+                LabeledContent("Stop and insert") { Text("Press the dictation shortcut again, or release Hold to talk") }
+                Text("Escape cancels. You can also click Insert or Copy. Text goes into the currently focused input; otherwise it is copied. Return and Command-Return stay with your active app. Completed dictations are saved in History, where you can save them as snippets.")
+                    .font(.caption).foregroundStyle(.secondary)
+                Text("If recognition fails, Retry transcribes the same recording. Audio stays in a temporary file on this Mac until you finish or discard it.")
+                    .font(.caption).foregroundStyle(.secondary)
                 LabeledContent("Microphone") {
                     HStack {
                         StatusDot(ok: microphone == .authorized)

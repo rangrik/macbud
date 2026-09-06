@@ -6,7 +6,7 @@ nonisolated enum BindableCommand: String, CaseIterable, Codable, Sendable {
     case moveUp, moveDown, moveLeft, moveRight, pageUp, pageDown, moveToStart, moveToEnd
     case primaryAction, secondaryAction
     case delete, clearAll, togglePin, saveAsSnippet, newItem, editItem, revealInFinder, quickLook
-    case nextSection, previousSection, selectClipboard, selectSnippets, selectScreenshots
+    case nextSection, previousSection, selectClipboard, selectSnippets, selectScreenshots, selectDictationHistory
     case startDictation, close, openSettings
 
     var panelCommand: PanelCommand {
@@ -34,6 +34,7 @@ nonisolated enum BindableCommand: String, CaseIterable, Codable, Sendable {
         case .selectClipboard: .selectSection(.clipboard)
         case .selectSnippets: .selectSection(.snippets)
         case .selectScreenshots: .selectSection(.screenshots)
+        case .selectDictationHistory: .selectSection(.dictationHistory)
         case .startDictation: .startDictation
         case .close: .close
         case .openSettings: .openSettings
@@ -55,7 +56,7 @@ nonisolated enum BindableCommand: String, CaseIterable, Codable, Sendable {
         case .delete: "Delete item"
         case .clearAll: "Clear clipboard history"
         case .togglePin: "Pin / unpin"
-        case .saveAsSnippet: "Save clipboard item as snippet"
+        case .saveAsSnippet: "Save text as snippet"
         case .newItem: "New snippet"
         case .editItem: "Edit snippet"
         case .revealInFinder: "Reveal in Finder"
@@ -65,6 +66,7 @@ nonisolated enum BindableCommand: String, CaseIterable, Codable, Sendable {
         case .selectClipboard: "Go to Clipboard"
         case .selectSnippets: "Go to Snippets"
         case .selectScreenshots: "Go to Screenshots"
+        case .selectDictationHistory: "Go to Dictation History"
         case .startDictation: "Start dictation"
         case .close: "Close"
         case .openSettings: "Open Settings"
@@ -75,7 +77,7 @@ nonisolated enum BindableCommand: String, CaseIterable, Codable, Sendable {
         switch self {
         case .moveUp, .moveDown, .moveLeft, .moveRight, .pageUp, .pageDown, .moveToStart, .moveToEnd: "Navigation"
         case .primaryAction, .secondaryAction, .delete, .clearAll, .togglePin, .saveAsSnippet, .newItem, .editItem, .revealInFinder, .quickLook: "Actions"
-        case .nextSection, .previousSection, .selectClipboard, .selectSnippets, .selectScreenshots: "Sections"
+        case .nextSection, .previousSection, .selectClipboard, .selectSnippets, .selectScreenshots, .selectDictationHistory: "Sections"
         case .startDictation, .close, .openSettings: "General"
         }
     }
@@ -117,6 +119,7 @@ nonisolated struct KeyBindings: Codable, Equatable, Sendable {
         .selectClipboard: [key(kVK_ANSI_1, .command)],
         .selectSnippets: [key(kVK_ANSI_2, .command)],
         .selectScreenshots: [key(kVK_ANSI_3, .command)],
+        .selectDictationHistory: [key(kVK_ANSI_4, .command)],
         .startDictation: [key(kVK_ANSI_D, .command)],
         .close: [key(kVK_Escape)],
         .openSettings: [key(kVK_ANSI_Comma, .command)],

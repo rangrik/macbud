@@ -5,6 +5,7 @@ import AppKit
 final class NotchPanel: NSPanel {
     /// Return `true` to swallow the key event.
     var keyHandler: ((NSEvent) -> Bool)?
+    var acceptsKeyboardFocus = true
 
     init(contentRect: CGRect) {
         super.init(contentRect: contentRect,
@@ -32,7 +33,7 @@ final class NotchPanel: NSPanel {
     /// AppKit normally keeps windows below the menu bar; the island must touch the screen edge.
     override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect { frameRect }
 
-    override var canBecomeKey: Bool { true }
+    override var canBecomeKey: Bool { acceptsKeyboardFocus }
     override var canBecomeMain: Bool { false }
 
     override func sendEvent(_ event: NSEvent) {

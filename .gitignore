@@ -1,5 +1,7 @@
 # Xcode / SwiftPM
 build/
+build-release/
+dist/
 DerivedData/
 *.xcodeproj/
 !project.yml
@@ -13,6 +15,8 @@ xcuserdata/
 *.dSYM
 # macOS
 .DS_Store
+# Affinity's temporary document locks
+*.af~lock~
 # Editors
 .idea/
 .vscode/

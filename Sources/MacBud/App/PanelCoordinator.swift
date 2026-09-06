@@ -15,6 +15,11 @@ final class PanelCoordinator {
     let snippets: SnippetsSectionController
     let screenshots: ScreenshotsSectionController
     let dictation: DictationController
+    let dictationHistoryStore: DictationHistoryStore
+    let dictationHistory: DictationHistorySectionController
+    private(set) var isHoldingToTalk = false
+    private(set) var dictationSessionHotKey: HotKey?
+    let keepAwake = KeepAwakeController()
     /// Set by the app once hotkeys are bound; used by the welcome screen and footer.
     var hotKeys: HotKeyBinder?
     /// Whether Settings was already showing when the island opened (see `didClose`).
@@ -32,25 +37,40 @@ final class PanelCoordinator {
         clipboard = ClipboardSectionController(store: clipboardStore, context: context)
         snippets = SnippetsSectionController(store: snippetStore, clipboard: clipboardStore, context: context)
         screenshots = ScreenshotsSectionController(library: library, context: context)
-        dictation = DictationController(settings: settings, context: context, clipboard: clipboardStore)
+        dictationHistoryStore = DictationHistoryStore(dataStore: snippetStore.dataStore)
+        dictationHistory = DictationHistorySectionController(store: dictationHistoryStore, context: context, snippets: snippets)
+        dictation = DictationController(settings: settings, context: context, clipboard: clipboardStore, history: dictationHistoryStore)
         clipboard.snippets = snippets
         dictation.onDidEnd = { [weak self] in self?.notch.close() }
+        dictation.onActivityChanged = { [weak self] active in
+            guard let self else { return }
+            if !active { isHoldingToTalk = false }
+            hotKeys?.dictationActivityChanged(active)
+        }
     }
 
     var showsWelcome: Bool { !settings.hasSeenWelcome }
+    var hasEnabledSection: Bool { settings.isEnabled(state.section.feature) }
 
-    var activeResultCount: Int {
-        switch state.section {
-        case .clipboard: clipboard.results.count
-        case .snippets: snippets.results.count
-        case .screenshots: screenshots.results.count
+    func applyFeatureSettings() {
+        if !settings.isEnabled(.dictation), dictation.isActive { dictation.cancel() }
+        if !settings.isEnabled(.keepAwake), keepAwake.isActive { keepAwake.stop() }
+        if !settings.isEnabled(.snippets), snippets.isEditing { snippets.cancelEditing() }
+        if !hasEnabledSection {
+            if let first = settings.enabledSections.first { state.section = first; settings.lastSection = first }
+            state.query = ""
+            state.footerHint = nil
+            activeDidShow()
         }
     }
 
     // MARK: Opening
 
     func open(section: Section? = nil) {
-        let target = section ?? (settings.rememberLastSection ? settings.lastSection : .clipboard)
+        if let section, !settings.isEnabled(section.feature) { return }
+        if dictation.isActive { dictation.cancel() }
+        let preferred = settings.rememberLastSection ? settings.lastSection : (settings.enabledSections.first ?? .clipboard)
+        let target = section ?? (settings.isEnabled(preferred.feature) ? preferred : settings.enabledSections.first)
         notch.open(section: target)
     }
 
@@ -59,11 +79,31 @@ final class PanelCoordinator {
     }
 
     /// Global dictation hotkey: start recording; pressing it again while recording delivers the text.
-    func startDictation() {
-        if state.isDictating {
-            if dictation.phase == .recording { dictation.finish(paste: settings.enterAction == .paste) }
+    func startDictation(trigger: HotKey? = nil) {
+        guard settings.isEnabled(.dictation) else { return }
+        if dictation.isActive {
+            if dictation.canRetry { dictation.retry() }
+            else { dictation.finish(.insert) }
             return
         }
+        isHoldingToTalk = false
+        dictationSessionHotKey = trigger ?? settings.dictationHotKey
+        beginDictation()
+    }
+
+    func startHoldToTalk() {
+        guard settings.isEnabled(.dictation), !dictation.isActive else { return }
+        isHoldingToTalk = true
+        dictationSessionHotKey = settings.holdToTalkHotKey
+        beginDictation()
+    }
+
+    func endHoldToTalk() {
+        guard isHoldingToTalk, dictation.isActive else { return }
+        dictation.finish(.insert)
+    }
+
+    private func beginDictation() {
         frontmost.capture()
         context.clearHint()
         notch.openDictation()
@@ -95,6 +135,7 @@ final class PanelCoordinator {
 
     /// Called by the notch controller right before the island appears.
     func willOpen() {
+        applyFeatureSettings()
         frontmost.capture()
         context.clearHint()
         settingsVisibleAtOpen = Self.settingsWindow != nil
@@ -106,7 +147,7 @@ final class PanelCoordinator {
     }
 
     func select(_ section: Section) {
-        guard section != state.section else { return }
+        guard settings.isEnabled(section.feature), section != state.section else { return }
         if snippets.isEditing { snippets.cancelEditing() }
         state.section = section
         settings.lastSection = section
@@ -121,6 +162,7 @@ final class PanelCoordinator {
         case .clipboard: clipboard.queryChanged()
         case .snippets: snippets.queryChanged()
         case .screenshots: screenshots.queryChanged()
+        case .dictationHistory: dictationHistory.queryChanged()
         }
     }
 
@@ -129,6 +171,7 @@ final class PanelCoordinator {
         case .clipboard: clipboard.didShow()
         case .snippets: snippets.didShow()
         case .screenshots: screenshots.didShow()
+        case .dictationHistory: dictationHistory.didShow()
         }
     }
 
@@ -136,6 +179,10 @@ final class PanelCoordinator {
 
     func handle(event: NSEvent) -> Bool {
         guard let command = KeyRouter.command(for: event, bindings: settings.keyBindings) else { return false }
+        if command == .startDictation, !state.isDictating, !snippets.isEditing {
+            startDictation(trigger: HotKey(keyCode: event.keyCode, modifiers: event.modifierFlags))
+            return true
+        }
         return handle(command)
     }
 
@@ -144,11 +191,9 @@ final class PanelCoordinator {
         if state.isDictating {
             switch command {
             case .close: dictation.cancel()
-            case .primaryAction:
-                if case .failed = dictation.phase { dictation.start() } else { dictation.finish(paste: context.wantsPaste(for: command)) }
-            case .secondaryAction: dictation.finish(paste: context.wantsPaste(for: command))
-            case .startDictation: dictation.finish(paste: settings.enterAction == .paste)
-            default: break
+            case .startDictation:
+                if dictation.canRetry { dictation.retry() } else { dictation.finish(.insert) }
+            default: return false
             }
             return true
         }
@@ -168,7 +213,10 @@ final class PanelCoordinator {
         case .nextSection, .previousSection:
             // While editing a snippet, ⇥ moves between fields instead of switching sections.
             if snippets.isEditing { return false }
-            select(command == .nextSection ? state.section.next : state.section.previous)
+            let sections = settings.enabledSections
+            guard let index = sections.firstIndex(of: state.section), !sections.isEmpty else { return true }
+            let offset = command == .nextSection ? 1 : sections.count - 1
+            select(sections[(index + offset) % sections.count])
             return true
         case .selectSection(let section):
             select(section)
@@ -187,10 +235,13 @@ final class PanelCoordinator {
     }
 
     private func activeHandle(_ command: PanelCommand) -> Bool {
-        switch state.section {
+        guard hasEnabledSection else { return false }
+        if command == .saveAsSnippet, !settings.isEnabled(.snippets) { return false }
+        return switch state.section {
         case .clipboard: clipboard.handle(command)
         case .snippets: snippets.handle(command)
         case .screenshots: screenshots.handle(command)
+        case .dictationHistory: dictationHistory.handle(command)
         }
     }
 
@@ -225,6 +276,7 @@ final class PanelCoordinator {
         let keys: String
         let label: String
         let command: PanelCommand?
+        var systemImage: String?
         var id: String { keys + label }
     }
 
@@ -233,11 +285,12 @@ final class PanelCoordinator {
         settings.keyBindings.chords(for: command).first?.displayString ?? "—"
     }
 
-    private func hint(_ command: BindableCommand, _ label: String) -> Hint {
-        Hint(keys: keys(for: command), label: label, command: command.panelCommand)
+    private func hint(_ command: BindableCommand, _ label: String, systemImage: String? = nil) -> Hint {
+        Hint(keys: keys(for: command), label: label, command: command.panelCommand, systemImage: systemImage)
     }
 
     func footerHints() -> [Hint] {
+        guard hasEnabledSection else { return [] }
         let app = frontmost.previousAppName ?? "app"
         let enterCopies = settings.enterAction == .copy
         let copy: BindableCommand = enterCopies ? .primaryAction : .secondaryAction
@@ -245,21 +298,23 @@ final class PanelCoordinator {
         var hints: [Hint] = []
         switch state.section {
         case .clipboard:
-            hints = [hint(copy, "Copy"), hint(paste, "Paste to \(app)"),
+            hints = [hint(copy, "Copy", systemImage: "doc.on.doc"), hint(paste, "Paste to \(app)"),
                      hint(.togglePin, clipboard.selected?.isPinned == true ? "Unpin" : "Pin"),
                      hint(.saveAsSnippet, "Snippet"), hint(.delete, "Delete")]
         case .snippets:
             if snippets.isEditing {
                 hints = [hint(.saveAsSnippet, "Save"), Hint(keys: "⇥", label: "Next field", command: nil), hint(.close, "Cancel")]
             } else {
-                hints = [hint(copy, "Copy"), hint(paste, "Paste to \(app)"), hint(.newItem, "New"), hint(.editItem, "Edit"), hint(.delete, "Delete")]
+                hints = [hint(copy, "Copy", systemImage: "doc.on.doc"), hint(paste, "Paste to \(app)"), hint(.newItem, "New"), hint(.editItem, "Edit"), hint(.delete, "Delete")]
             }
         case .screenshots:
-            hints = [hint(copy, "Copy"), hint(paste, "Paste to \(app)"), hint(.quickLook, "Quick Look"),
+            hints = [hint(copy, "Copy", systemImage: "doc.on.doc"), hint(paste, "Paste to \(app)"), hint(.quickLook, "Quick Look"),
                      hint(.revealInFinder, "Finder"), hint(.delete, "Trash")]
+        case .dictationHistory:
+            hints = [hint(copy, "Copy", systemImage: "doc.on.doc"), hint(paste, "Insert"), hint(.saveAsSnippet, "Save as snippet"), hint(.delete, "Delete")]
         }
         if !snippets.isEditing { hints.append(hint(.nextSection, "Section")) }
-        return hints
+        return hints.filter { $0.command != .saveAsSnippet || settings.isEnabled(.snippets) }
     }
 
     // MARK: Automation
@@ -267,8 +322,17 @@ final class PanelCoordinator {
     func dump() -> [String: Any] {
         var d: [String: Any] = [
             "phase": state.isDictating ? "dictation" : state.isExpanded ? "expanded" : "collapsed",
-            "dictation": ["phase": String(describing: dictation.phase), "transcript": dictation.transcript],
+            "panelVisible": notch.panel.isVisible,
+            "panelKey": notch.panel.isKeyWindow,
+            "accessibilityTrusted": Paster.isAccessibilityTrusted,
+            "focusedEditableInput": FocusedTextTarget.capture() != nil,
+            "panelFrame": ["x": notch.panel.frame.minX, "y": notch.panel.frame.minY, "width": notch.panel.frame.width, "height": notch.panel.frame.height],
+            "holdingToTalk": isHoldingToTalk,
+            "dictation": ["phase": String(describing: dictation.phase), "transcript": dictation.transcript, "canRetry": dictation.canRetry],
+            "keepAwake": ["active": keepAwake.isActive, "error": keepAwake.errorMessage ?? ""],
             "section": state.section.rawValue,
+            "enabledSections": settings.enabledSections.map(\.rawValue),
+            "disabledFeatures": settings.disabledFeatures.map(\.rawValue).sorted(),
             "query": state.query,
             "footerHint": state.footerHint ?? "",
             "welcome": showsWelcome,
@@ -293,6 +357,10 @@ final class PanelCoordinator {
             d["selectedIndex"] = screenshots.selectedIndex
             d["results"] = screenshots.results.prefix(20).map(\.item.filename)
             d["selected"] = screenshots.selected?.filename ?? ""
+        case .dictationHistory:
+            d["selectedIndex"] = dictationHistory.selectedIndex
+            d["results"] = dictationHistory.results.prefix(20).map(\.text)
+            d["selected"] = dictationHistory.selected?.text ?? ""
         }
         return d
     }
@@ -305,6 +373,11 @@ final class HotKeyBinder {
     private let coordinator: PanelCoordinator
     private(set) var effectiveToggle: HotKey?
     private(set) var toggleProblem: String?
+    private(set) var dictationProblem: String?
+    private(set) var holdToTalkProblem: String?
+    private var escapeID: UInt32?
+    private var sessionTriggerID: UInt32?
+    private let escapeMonitor = DictationEscapeMonitor()
 
     init(settings: AppSettings, coordinator: PanelCoordinator) {
         self.settings = settings
@@ -313,9 +386,15 @@ final class HotKeyBinder {
 
     func apply() {
         let center = HotKeyCenter.shared
+        // Rebinding while held must not lose the release and leave the microphone running.
+        if coordinator.isHoldingToTalk { coordinator.endHoldToTalk() }
         center.unregisterAll()
+        escapeID = nil
+        sessionTriggerID = nil
         effectiveToggle = nil
         toggleProblem = nil
+        dictationProblem = nil
+        holdToTalkProblem = nil
         if let wanted = settings.toggleHotKey {
             do {
                 try center.register(wanted) { [weak self] in self?.coordinator.toggle() }
@@ -329,13 +408,41 @@ final class HotKeyBinder {
                 }
             }
         }
-        for (section, hotKey) in settings.sectionHotKeys {
+        for (section, hotKey) in settings.sectionHotKeys where settings.isEnabled(section.feature) {
             do { try center.register(hotKey) { [weak self] in self?.coordinator.open(section: section) } }
             catch { Log.input.error("section hotkey \(section.rawValue) failed: \(error.localizedDescription)") }
         }
-        if let hotKey = settings.dictationHotKey {
-            do { try center.register(hotKey) { [weak self] in self?.coordinator.startDictation() } }
-            catch { Log.input.error("dictation hotkey failed: \(error.localizedDescription)") }
+        if settings.isEnabled(.dictation), let hotKey = settings.dictationHotKey {
+            do { try center.register(hotKey) { [weak self] in self?.coordinator.startDictation(trigger: hotKey) } }
+            catch { dictationProblem = error.localizedDescription }
         }
+        if settings.isEnabled(.dictation), let hotKey = settings.holdToTalkHotKey {
+            do {
+                try center.register(hotKey, onRelease: { [weak self] in self?.coordinator.endHoldToTalk() }) { [weak self] in
+                    self?.coordinator.startHoldToTalk()
+                }
+            } catch { holdToTalkProblem = error.localizedDescription }
+        }
+        dictationActivityChanged(coordinator.dictation.isActive)
+    }
+
+    func dictationActivityChanged(_ active: Bool) {
+        let center = HotKeyCenter.shared
+        escapeMonitor.stop()
+        if let escapeID { center.unregister(id: escapeID) }
+        if let sessionTriggerID { center.unregister(id: sessionTriggerID) }
+        escapeID = nil
+        sessionTriggerID = nil
+        guard active else { return }
+        escapeMonitor.start { [weak self] in self?.coordinator.dictation.cancel() }
+        do {
+            escapeID = try center.register(HotKey(keyCode: 53, modifiers: [])) { [weak self] in
+                self?.coordinator.dictation.cancel()
+            }
+            if let trigger = coordinator.dictationSessionHotKey, trigger.isUsableGlobally,
+               trigger != settings.dictationHotKey, trigger != settings.holdToTalkHotKey {
+                sessionTriggerID = try center.register(trigger) { [weak self] in self?.coordinator.startDictation() }
+            }
+        } catch { dictationProblem = error.localizedDescription }
     }
 }

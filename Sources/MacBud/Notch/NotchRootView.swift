@@ -23,32 +23,47 @@ struct NotchRootView: View {
         case .collapsed: m.collapsedBottomRadius
         }
         let open = phase != .collapsed
-        ZStack(alignment: .top) {
-            IslandSilhouette(topFillet: open ? m.topFillet : 0, bottomRadius: radius)
-                .frame(width: shapeSize.width, height: shapeSize.height)
-
-            Group {
-                if let content { content() } else { Color.clear }
-            }
-            .frame(width: m.islandSize.width, height: m.islandSize.height)
-            .padding(.horizontal, m.topFillet)
-            .opacity(phase == .expanded ? 1 : 0)
-            .scaleEffect(phase == .expanded ? 1 : 0.96, anchor: .top)
-            .animation(phase == .expanded ? .easeOut(duration: 0.18).delay(0.10) : .easeIn(duration: 0.10), value: phase)
-            .allowsHitTesting(phase == .expanded)
-
-            if let dictation {
-                dictation()
-                    .frame(width: m.dictationSize.width, height: m.dictationSize.height)
-                    .padding(.horizontal, m.topFillet)
-                    .opacity(phase == .dictation ? 1 : 0)
-                    .animation(phase == .dictation ? .easeOut(duration: 0.16).delay(0.10) : .easeIn(duration: 0.08), value: phase)
-                    .allowsHitTesting(phase == .dictation)
+        let canvas = state.panelUsesDictationSize ? m.dictationSize : m.islandSize
+        // An invisible expanded view must not determine the smaller dictation window's layout width.
+        Color.clear.overlay(alignment: .top) {
+            NotchSurface(size: shapeSize, canvasSize: CGSize(width: canvas.width + m.topFillet * 2, height: canvas.height),
+                         topFillet: open ? m.topFillet : 0, bottomRadius: radius) {
+                if phase == .expanded, let content {
+                    content()
+                        .frame(width: m.islandSize.width, height: m.islandSize.height)
+                        .padding(.horizontal, m.topFillet)
+                        .transition(.opacity)
+                }
+                if phase == .dictation, let dictation {
+                    dictation()
+                        .frame(width: m.dictationSize.width, height: m.dictationSize.height)
+                        .padding(.horizontal, m.topFillet)
+                        .transition(.opacity)
+                }
             }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .frame(width: canvas.width + m.topFillet * 2, height: canvas.height, alignment: .top)
         .preferredColorScheme(.dark)
         .environment(\.colorScheme, .dark)
+    }
+}
+
+/// The background and controls share one surface throughout expansion and collapse.
+struct NotchSurface<Content: View>: View {
+    let size: CGSize
+    let canvasSize: CGSize
+    let topFillet: CGFloat
+    let bottomRadius: CGFloat
+    @ViewBuilder var content: () -> Content
+
+    var body: some View {
+        Color.black
+            .overlay(alignment: .top) { content() }
+            .frame(width: canvasSize.width, height: canvasSize.height)
+            .mask(alignment: .top) {
+                NotchShape(topFillet: topFillet, bottomRadius: bottomRadius)
+                    .frame(width: size.width, height: size.height)
+            }
     }
 }
 
@@ -101,7 +116,7 @@ struct NotchBaseView: View {
                     .animation(toasting ? .easeOut(duration: 0.16).delay(0.08) : .easeIn(duration: 0.1), value: toasting)
             }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .frame(width: state.baseCanvasSize.width, height: state.baseCanvasSize.height, alignment: .top)
         .preferredColorScheme(.dark)
         .environment(\.colorScheme, .dark)
     }
@@ -118,18 +133,16 @@ struct NotchTabContent: View {
     var body: some View {
         let hovered = state.tabHovered
         HStack(spacing: 0) {
-            Image(systemName: "rectangle.topthird.inset.filled")
-                .font(.system(size: hovered ? 12 : 11, weight: .semibold))
-                .foregroundStyle(.white.opacity(hovered ? 1 : 0.62))
+            MacBudMark(size: hovered ? 19 : 17)
                 .frame(width: wing, height: height)
             Spacer().frame(width: notchWidth)
-            Image(systemName: state.notchStatusSymbol ?? "chevron.down")
+            Image(systemName: state.keepsAwake ? "sun.max.fill" : (state.notchStatusSymbol ?? "chevron.down"))
                 .font(.system(size: state.notchStatusSymbol == nil ? 9 : 10, weight: .bold))
-                .foregroundStyle(state.notchStatusSymbol == nil ? .white.opacity(hovered ? 0.95 : 0.42) : Theme.warning)
+                .foregroundStyle(state.keepsAwake ? .orange : (state.notchStatusSymbol == nil ? .white.opacity(hovered ? 0.95 : 0.42) : Theme.warning))
                 .frame(width: wing, height: height)
         }
         .animation(.easeOut(duration: 0.18), value: hovered)
-        .accessibilityLabel("MacBud")
+        .accessibilityLabel(state.keepsAwake ? "MacBud · Keep Awake is on" : "MacBud")
         .accessibilityHint("Click to open MacBud")
     }
 }
