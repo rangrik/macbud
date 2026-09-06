@@ -28,7 +28,7 @@ make package           # build Release, create a versioned ZIP and SHA-256 in di
 
 ## Releases
 
-Download the ZIP from [GitHub Releases](https://github.com/rangrik/macbud/releases), extract it, and move MacBud.app into Applications. Releases require macOS 26 or later. The v0.1.0 build contains both Apple Silicon and Intel executables; on-device dictation depends on the speech capabilities available on your Mac.
+Download the ZIP from [GitHub Releases](https://github.com/rangrik/macbud/releases), extract it, and move MacBud.app into Applications. Releases require macOS 26 or later. Release builds contain both Apple Silicon and Intel executables; on-device dictation depends on the speech capabilities available on your Mac.
 
 The current release uses the available Apple Development signing certificate and is **not notarized**. macOS may block a downloaded copy. Developer ID signing and Apple notarization are needed for a release that passes Gatekeeper on other Macs without an override. Local installation uses the same app identity and retains settings and saved data.
 
