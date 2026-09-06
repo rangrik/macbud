@@ -8,7 +8,7 @@ A keyboard-first macOS utility in the MacBook notch: clipboard history, text sni
 
 ## Controls
 
-- **Features and tab order:** Settings → Features has checkboxes for Clipboard, Snippets, Screenshots, History, Dictation, and Keep Alive. Use the arrows to reorder section tabs. Disabled features hide their controls and stop their shortcuts/background work; saved data and shortcut preferences are retained. History and Dictation can be enabled independently.
+- **Features and tab order:** Settings → Features has checkboxes for Clipboard, Snippets, Screenshots, History, Dictation, and Keep Alive. Use the arrows to reorder section tabs; **⌘1–⌘4** inside the island follow that order, so ⌘1 is always the first tab and a hidden tab closes the gap. Disabled features hide their controls and stop their shortcuts/background work; saved data and shortcut preferences are retained. History and Dictation can be enabled independently.
 - **Keep Alive:** turn on the switch after the label at the right of the notch to keep the Mac and display awake until you turn it off. Closing the notch leaves it on; quitting MacBud releases it. macOS still controls explicit Sleep and lid closure.
 - **Dictation:** press your configured dictation shortcut (default **⌥⇧D**) to start; press it again to stop and insert. The transcript follows its newest words automatically. **Escape** cancels. Return and Command-Return remain with the active app. You can also click **Insert**, **Copy**, or **Cancel** in the bottom action strip.
 - **Hold to talk:** hold **⌃⌥D**, speak, and release to stop and insert. Both dictation shortcuts are editable in Settings → Shortcuts. If no editable input is focused, the transcript is copied. Dictation never sends Return.

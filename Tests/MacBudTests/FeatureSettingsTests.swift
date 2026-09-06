@@ -50,6 +50,24 @@ import Testing
         #expect(!coordinator.state.isOpen)
     }
 
+    @Test func sectionShortcutsFollowTabPositions() {
+        let coordinator = makeCoordinator()
+        let settings = coordinator.settings
+        #expect(coordinator.handle(.selectSectionAt(1)))
+        #expect(coordinator.state.section == .snippets)
+        settings.setSectionOrder([.screenshots, .clipboard, .snippets, .dictationHistory])
+        #expect(coordinator.handle(.selectSectionAt(1)))
+        #expect(coordinator.state.section == .clipboard, "⌘2 follows whichever tab is second now")
+        settings.setEnabled(false, for: .clipboard)
+        coordinator.applyFeatureSettings()
+        #expect(coordinator.handle(.selectSectionAt(1)))
+        #expect(coordinator.state.section == .snippets, "a hidden tab closes the gap instead of skipping a number")
+        #expect(coordinator.handle(.selectSectionAt(3)))
+        #expect(coordinator.state.section == .snippets, "there is no fourth tab, so nothing moves")
+        #expect(coordinator.sectionShortcut(at: 0)?.hasPrefix("⌘") == true)
+        #expect(coordinator.sectionShortcut(at: Section.allCases.count) == nil)
+    }
+
     @Test func allFeaturesCanBeDisabledWithoutOpeningHiddenTools() {
         let coordinator = makeCoordinator()
         for feature in AppFeature.allCases { coordinator.settings.setEnabled(false, for: feature) }

@@ -1,4 +1,12 @@
-# Latest update — feature preferences, tab order, and full-notch scrolling (2026-09-05)
+# Latest update — section shortcuts follow the tab order (2026-09-05)
+
+⌘1…⌘4 used to name a fixed section (`selectClipboard`, `selectSnippets`, …), so reordering tabs in Settings → Features left Screenshots at position 2 answering to ⌘3. The bindable commands are now tab positions (`selectSection1`…`selectSection4` → `PanelCommand.selectSectionAt(index)`), resolved against `settings.enabledSections` when the key is pressed. Hiding a feature closes the gap rather than skipping a number, and a position with no tab does nothing. Settings written before this keep their chords: decoding moves each retired per-section command to the slot its section held in the default order, and drops commands that no longer exist. Settings → Shortcuts names the current occupant of each slot ("Go to section 2 — Screenshots"), disables slots with no tab, and says the shortcuts follow the tab order; each island tab's tooltip shows the chord that opens it.
+
+Verification: **79 tests in 15 suites passed** (new: slot/section coverage, the legacy-binding migration, and ⌘2 following a reordered and then hidden tab). Checked in the running Debug app against the user's own order (Clipboard, Screenshots, Snippets, History) with real key events through `mbctl`: ⌘1 → Clipboard, ⌘2 → Screenshots, ⌘3 → Snippets, ⌘4 → History. Their saved preferences were left untouched. The new Settings → Shortcuts rows were not visually inspected — the pane's section group sits below the fold and the shell has no Accessibility trust to scroll it.
+
+---
+
+# Previous update — feature preferences, tab order, and full-notch scrolling (2026-09-05)
 
 Settings → Features now has native checkboxes for Clipboard, Snippets, Screenshots, History, Dictation, and Keep Alive, plus accessible arrows to reorder the four section tabs. Ordered IDs and disabled features persist in UserDefaults. Disabled sections are removed from the notch, menu, and dedicated Settings pages; navigation skips them, global shortcuts are unregistered, and cross-feature Save as snippet is gated. Clipboard polling and screenshot watchers/scans stop when disabled. Turning off active Dictation cancels it; turning off Keep Alive releases its assertions. History can be disabled independently of Dictation and stops saving new transcripts. Existing data and shortcut preferences are retained. With all sections off, the notch offers Open Settings.
 

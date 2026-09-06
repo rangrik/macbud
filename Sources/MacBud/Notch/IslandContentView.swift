@@ -11,7 +11,8 @@ struct IslandContentView: View {
         let sideWidth = (state.metrics.islandSize.width - notchWidth) / 2
         VStack(spacing: 0) {
             HStack(spacing: 0) {
-                SectionTabs(sections: coordinator.settings.enabledSections, selected: state.section) { coordinator.select($0) }
+                SectionTabs(sections: coordinator.settings.enabledSections, selected: state.section,
+                            shortcut: { coordinator.sectionShortcut(at: $0) }) { coordinator.select($0) }
                     .padding(.leading, 14)
                     .frame(width: sideWidth, alignment: .leading)
                 Spacer().frame(width: notchWidth)
@@ -56,12 +57,14 @@ struct IslandContentView: View {
 struct SectionTabs: View {
     let sections: [Section]
     let selected: Section
+    /// The chord that opens each tab position, so a tooltip can say which one this tab answers to.
+    let shortcut: (Int) -> String?
     let onSelect: (Section) -> Void
 
     var body: some View {
         GlassEffectContainer(spacing: 6) {
             HStack(spacing: 4) {
-                ForEach(sections) { section in
+                ForEach(Array(sections.enumerated()), id: \.element) { index, section in
                     let isSelected = section == selected
                     Button { onSelect(section) } label: {
                     HStack(spacing: 6) {
@@ -81,7 +84,7 @@ struct SectionTabs: View {
                     .buttonStyle(.plain)
                     .accessibilityLabel(section.title)
                     .accessibilityAddTraits(isSelected ? .isSelected : [])
-                    .help(section.title)
+                    .help(shortcut(index).map { "\(section.title) (\($0))" } ?? section.title)
                 }
             }
         }

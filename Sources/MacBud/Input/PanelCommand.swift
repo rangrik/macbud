@@ -8,7 +8,10 @@ nonisolated enum PanelCommand: Equatable, Sendable {
     /// ⌘↩ — the other one.
     case secondaryAction
     case delete, clearAll, togglePin, saveAsSnippet, newItem, editItem, revealInFinder, quickLook
-    case nextSection, previousSection, selectSection(Section)
+    case nextSection, previousSection
+    /// Jump to the section sitting at this position in the island's tab bar (0-based),
+    /// so ⌘1…⌘4 follow the order set in Settings › Features rather than fixed sections.
+    case selectSectionAt(Int)
     case startDictation
     case close, openSettings
 }

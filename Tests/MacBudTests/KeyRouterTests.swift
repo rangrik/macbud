@@ -25,7 +25,7 @@ import Testing
         #expect(KeyRouter.command(for: event("\u{7F}", code: 51)) == nil, "plain backspace belongs to the text field")
         #expect(KeyRouter.command(for: event("\t", code: 48)) == .nextSection)
         #expect(KeyRouter.command(for: event("\t", code: 48, .shift)) == .previousSection)
-        #expect(KeyRouter.command(for: event("2", code: 19, .command)) == .selectSection(.snippets))
+        #expect(KeyRouter.command(for: event("2", code: 19, .command)) == .selectSectionAt(1))
         #expect(KeyRouter.command(for: event("p", code: 35, .command)) == .togglePin)
         #expect(KeyRouter.command(for: event(",", code: 43, .command)) == .openSettings)
     }
@@ -48,5 +48,30 @@ import Testing
         let data = try JSONEncoder().encode(KeyBindings.defaults)
         let decoded = try JSONDecoder().decode(KeyBindings.self, from: data)
         #expect(decoded == KeyBindings.defaults)
+    }
+
+    @Test func sectionSlotsCoverEverySection() {
+        #expect(BindableCommand.sectionSlots.count == Section.allCases.count)
+        for (index, slot) in BindableCommand.sectionSlots.enumerated() {
+            #expect(slot.panelCommand == .selectSectionAt(index))
+            #expect(BindableCommand.sectionSlot(at: index) == slot)
+            #expect(slot.sectionSlotIndex == index)
+        }
+        #expect(BindableCommand.sectionSlot(at: Section.allCases.count) == nil)
+    }
+
+    @Test func savedPerSectionChordsBecomeTabPositions() throws {
+        let command1 = HotKey(keyCode: 18, modifiers: .command)
+        let command3 = HotKey(keyCode: 20, modifiers: .command)
+        // Settings written before ⌘1…⌘4 addressed tab positions, plus a command that no longer exists.
+        let legacy = ["chords": ["selectClipboard": [command1], "selectScreenshots": [command3],
+                                 "retired": [HotKey(keyCode: 6, modifiers: .command)]]]
+        let decoded = try JSONDecoder().decode(KeyBindings.self, from: JSONEncoder().encode(legacy))
+        #expect(decoded.chords(for: .selectSection1) == [command1], "Clipboard was the first tab")
+        #expect(decoded.chords(for: .selectSection3) == [command3], "Screenshots was the third tab")
+        #expect(decoded.chords(for: .selectSection2).isEmpty)
+        let json = String(decoding: try JSONEncoder().encode(decoded), as: UTF8.self)
+        #expect(!json.contains("selectClipboard"))
+        #expect(!json.contains("retired"))
     }
 }

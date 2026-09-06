@@ -200,7 +200,7 @@ final class PanelCoordinator {
         if showsWelcome {
             switch command {
             case .close: notch.close()
-            case .primaryAction, .secondaryAction, .nextSection, .selectSection: settings.hasSeenWelcome = true
+            case .primaryAction, .secondaryAction, .nextSection, .selectSectionAt: settings.hasSeenWelcome = true
             default: break
             }
             return true
@@ -218,8 +218,9 @@ final class PanelCoordinator {
             let offset = command == .nextSection ? 1 : sections.count - 1
             select(sections[(index + offset) % sections.count])
             return true
-        case .selectSection(let section):
-            select(section)
+        case .selectSectionAt(let index):
+            let sections = settings.enabledSections
+            if sections.indices.contains(index) { select(sections[index]) }
             return true
         case .openSettings:
             if snippets.isEditing { return false }
@@ -283,6 +284,13 @@ final class PanelCoordinator {
     /// Display string of the first chord bound to a command (reflects the user's custom bindings).
     func keys(for command: BindableCommand) -> String {
         settings.keyBindings.chords(for: command).first?.displayString ?? "—"
+    }
+
+    /// The chord that opens the tab at this position, for tab tooltips. Positions past the last
+    /// slot (or with no chord bound) have none.
+    func sectionShortcut(at index: Int) -> String? {
+        guard let slot = BindableCommand.sectionSlot(at: index) else { return nil }
+        return settings.keyBindings.chords(for: slot).first?.displayString
     }
 
     private func hint(_ command: BindableCommand, _ label: String, systemImage: String? = nil) -> Hint {

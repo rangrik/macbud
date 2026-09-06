@@ -74,20 +74,36 @@ private struct BindingGroupSection: View {
     let group: String
 
     var body: some View {
-        SwiftUI.Section(group == "General" ? "Inside the island — general" : "Inside the island — \(group.lowercased())") {
+        SwiftUI.Section {
             ForEach(BindableCommand.allCases.filter { $0.group == group }, id: \.self) { command in
-                BindingRow(settings: settings, command: command)
+                BindingRow(settings: settings, command: command, section: section(for: command))
+                    .disabled(command.sectionSlotIndex != nil && section(for: command) == nil)
+            }
+        } header: {
+            Text(group == "General" ? "Inside the island — general" : "Inside the island — \(group.lowercased())")
+        } footer: {
+            if group == "Sections" {
+                Text("Section shortcuts follow the tab order: ⌘1 is always the first tab. Reorder or hide tabs in Features.")
             }
         }
+    }
+
+    /// The section a ⌘1…⌘4 slot opens right now, or nil when the island shows fewer tabs than slots.
+    private func section(for command: BindableCommand) -> Section? {
+        guard let index = command.sectionSlotIndex else { return nil }
+        let sections = settings.enabledSections
+        return sections.indices.contains(index) ? sections[index] : nil
     }
 }
 
 private struct BindingRow: View {
     @Bindable var settings: AppSettings
     let command: BindableCommand
+    /// For a ⌘1…⌘4 slot, the section it currently lands on — the row names it so the mapping is visible.
+    var section: Section? = nil
 
     var body: some View {
-        LabeledContent(command.title) {
+        LabeledContent(section.map { "\(command.title) — \($0.title)" } ?? command.title) {
             HStack(spacing: 6) {
                 HotKeyRecorder(hotKey: chordBinding(slot: 0), requiresModifier: false, compact: true)
                 HotKeyRecorder(hotKey: chordBinding(slot: 1), requiresModifier: false, compact: true)
