@@ -349,6 +349,13 @@ final class PanelCoordinator {
             "installedInApplications": AppDelegate.isInstalledInApplications,
             "bundlePath": Bundle.main.bundleURL.path,
             "showsTab": notch.showsTab,
+            "activeDisplay": notch.state.geometry.displayID,
+            "displays": notch.screens.map { screen in
+                ["id": screen.displayID, "active": screen.isActive, "physicalNotch": screen.geometry.hasPhysicalNotch,
+                 "visible": screen.window.isVisible,
+                 "notch": ["x": screen.window.frame.minX, "y": screen.window.frame.minY,
+                           "width": screen.window.frame.width, "height": screen.window.frame.height]]
+            },
         ]
         switch state.section {
         case .clipboard:

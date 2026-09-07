@@ -82,13 +82,14 @@ struct IslandSilhouette: View {
 /// Content of the always-on base window: the idle notch (widened into a clickable tab with an icon on a
 /// real notch; nothing on notch-less displays) and action toasts.
 struct NotchBaseView: View {
+    @Bindable var screen: ScreenNotch
     @Bindable var state: NotchState
     let controller: NotchController
 
     var body: some View {
         let m = state.metrics
-        let g = state.geometry
-        let toasting = state.basePhase == .toast
+        let g = screen.geometry
+        let toasting = screen.isActive && state.basePhase == .toast
         let tab = controller.showsTab
         let hovered = tab && !toasting && state.tabHovered
         let size: CGSize = toasting
@@ -98,7 +99,7 @@ struct NotchBaseView: View {
             IslandSilhouette(topFillet: toasting || tab ? min(m.topFillet, 8) : 0,
                              bottomRadius: toasting ? m.toastBottomRadius : m.collapsedBottomRadius)
                 .frame(width: size.width, height: size.height)
-                .opacity(toasting || g.hasPhysicalNotch ? 1 : 0)
+                .opacity(toasting || tab || g.hasPhysicalNotch ? 1 : 0)
                 .animation(.easeOut(duration: 0.18), value: hovered)
 
             if tab, !toasting {
@@ -116,7 +117,7 @@ struct NotchBaseView: View {
                     .animation(toasting ? .easeOut(duration: 0.16).delay(0.08) : .easeIn(duration: 0.1), value: toasting)
             }
         }
-        .frame(width: state.baseCanvasSize.width, height: state.baseCanvasSize.height, alignment: .top)
+        .frame(width: screen.canvasSize.width, height: screen.canvasSize.height, alignment: .top)
         .preferredColorScheme(.dark)
         .environment(\.colorScheme, .dark)
     }

@@ -42,7 +42,6 @@ final class NotchState {
     var phase: NotchPhase = .collapsed
     /// Keep the last panel canvas during collapse; SwiftUI must never negotiate a new window size.
     var panelUsesDictationSize = false
-    var baseCanvasSize: CGSize
     var basePhase: BasePhase = .idle
     var section: Section = .clipboard
     var query = ""
@@ -62,7 +61,6 @@ final class NotchState {
 
     init(geometry: NotchGeometry) {
         self.geometry = geometry
-        baseCanvasSize = geometry.notchRect.size
     }
 
     var isExpanded: Bool { phase == .expanded }
