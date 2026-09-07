@@ -1,5 +1,7 @@
 # MacBud
 
+![MacBud — Your Mac essentials. Right in the notch.](Resources/Brand/MacBud-Social-Preview.png)
+
 A keyboard-first macOS utility in the MacBook notch: clipboard history, text snippets, screenshots, on-device dictation, and a Keep Alive switch.
 
 - macOS 26 (Tahoe), Apple Silicon. Swift 6, SwiftUI + AppKit.
