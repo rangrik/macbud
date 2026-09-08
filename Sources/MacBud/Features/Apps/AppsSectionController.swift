@@ -27,7 +27,7 @@ final class AppsSectionController {
         }
         let open = Array(Self.byLastVisit(index.running).prefix(Self.openLimit))
         let recent = Self.recentApps(index.installed, excluding: Set(open.map(\.bundleID)), limit: Self.recentLimit)
-        return AppGrid(groups: [.init(title: "Open now", items: open), .init(title: "Recent", items: recent)],
+        return AppGrid(groups: [.init(title: "Recent", items: open), .init(title: "All", items: recent)],
                        columns: Self.columns)
     }
 
@@ -47,7 +47,7 @@ final class AppsSectionController {
             .map(\.element)
     }
 
-    /// Apps you have actually used, most recent first, minus the ones already shown as open.
+    /// Apps you have actually used, most recent first, minus the ones already shown in the top group.
     nonisolated static func recentApps(_ installed: [AppEntry], excluding excluded: Set<String>, limit: Int) -> [AppEntry] {
         installed
             .filter { !excluded.contains($0.bundleID) && $0.lastUsed != nil }

@@ -90,17 +90,9 @@ struct AppTile: View {
 
     var body: some View {
         VStack(spacing: 6) {
-            ZStack(alignment: .bottomTrailing) {
-                Image(nsImage: AppIconCache.icon(for: entry.url))
-                    .resizable().interpolation(.high)
-                    .frame(width: 40, height: 40)
-                if entry.isRunning {
-                    Circle().fill(Theme.accent)
-                        .frame(width: 7, height: 7)
-                        .overlay(Circle().strokeBorder(.black.opacity(0.35), lineWidth: 1))
-                        .offset(x: 2, y: 1)
-                }
-            }
+            Image(nsImage: AppIconCache.icon(for: entry.url))
+                .resizable().interpolation(.high)
+                .frame(width: 40, height: 40)
             HighlightedText(text: entry.name, query: query, font: .system(size: 11), color: Theme.textSecondary)
                 .lineLimit(1)
                 .truncationMode(.tail)
