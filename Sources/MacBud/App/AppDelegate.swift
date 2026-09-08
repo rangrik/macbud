@@ -41,6 +41,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             await clipboardStore.load()
             await snippetStore.load()
             await coordinator.dictationHistoryStore.load()
+            await coordinator.dictationWordStore.load()
             if settings.isEnabled(.dictationHistory), !settings.hasMigratedDictationHistory {
                 coordinator.dictationHistoryStore.importLegacy(clipboardStore.items, sourceBundleID: Bundle.main.bundleIdentifier ?? "com.rangrik.macbud")
                 await coordinator.dictationHistoryStore.flush()

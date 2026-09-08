@@ -21,7 +21,10 @@ final class DictationController {
             if (oldValue == .idle) != (phase == .idle) { onActivityChanged?(phase != .idle) }
         }
     }
-    private(set) var transcript = ""
+    /// Settled words you may correct, plus the draft tail the engine still owns.
+    private(set) var document = DictationTranscript()
+    /// The word whose correction popover is open. While it is set the microphone is paused.
+    private(set) var editingWordID: UUID?
     private(set) var levels: [Float] = Array(repeating: 0, count: 28)
     private(set) var elapsed: TimeInterval = 0
     private(set) var locale: Locale?
@@ -30,6 +33,7 @@ final class DictationController {
     @ObservationIgnored private let makeEngine: () -> any DictationEngineSession
     @ObservationIgnored private let prepare: Preparation
     @ObservationIgnored private let deliverText: (String, DictationDelivery) -> Void
+    @ObservationIgnored private let words: DictationWordStore?
     @ObservationIgnored private var engine: (any DictationEngineSession)?
     @ObservationIgnored private var operation: Task<Void, Never>?
     @ObservationIgnored private var timer: Task<Void, Never>?
@@ -41,14 +45,19 @@ final class DictationController {
     var onActivityChanged: ((Bool) -> Void)?
 
     init(makeEngine: @escaping () -> any DictationEngineSession = { DictationEngine() },
-         prepare: @escaping Preparation, deliver: @escaping (String, DictationDelivery) -> Void) {
+         prepare: @escaping Preparation, deliver: @escaping (String, DictationDelivery) -> Void,
+         words: DictationWordStore? = nil) {
         self.makeEngine = makeEngine
         self.prepare = prepare
         self.deliverText = deliver
+        self.words = words
     }
 
+    var transcript: String { document.text }
+    var isEditingWord: Bool { editingWordID != nil }
+
     convenience init(settings: AppSettings, context: ActionContext, clipboard: ClipboardStore,
-                     history: DictationHistoryStore) {
+                     history: DictationHistoryStore, words: DictationWordStore) {
         self.init(prepare: { progress in
             guard let locale = await DictationEngine.resolveLocale(preferred: settings.dictationLocale) else {
                 throw DictationEngine.EngineError.localeUnsupported(Locale.current)
@@ -64,7 +73,7 @@ final class DictationController {
                 clipboard.add(ClipboardItem(id: UUID(), kind: .text, copiedAt: .now, text: text, byteCount: text.utf8.count,
                                         sourceBundleID: Bundle.main.bundleIdentifier, contentHash: ClipboardItem.hash(ofText: text)))
             }
-        })
+        }, words: words)
     }
 
     var isActive: Bool { phase != .idle }
@@ -83,7 +92,8 @@ final class DictationController {
         let token = attempt
         self.delivery = delivery
         pendingFinish = nil
-        transcript = ""
+        document = DictationTranscript()
+        editingWordID = nil
         elapsed = 0
         canRetry = false
         levels = Array(repeating: 0, count: levels.count)
@@ -98,6 +108,7 @@ final class DictationController {
                 }
                 guard attempt == token, !Task.isCancelled else { return }
                 self.locale = locale
+                session.vocabulary = words?.vocabulary ?? []
                 if let file {
                     phase = .finalizing
                     let text = try await session.transcribe(file: file, locale: locale)
@@ -127,6 +138,7 @@ final class DictationController {
             return
         }
         guard phase == .recording, let engine else { return }
+        cancelEditing()
         delivery = action
         finalize(engine, retry: false)
     }
@@ -147,10 +159,10 @@ final class DictationController {
         operation = Task { [weak self] in
             guard let self else { return }
             do {
-                let text: String
-                if retry { text = try await session.retry() } else { text = try await session.stop() }
+                let result: DictationTranscript
+                if retry { result = try await session.retry() } else { result = try await session.stop() }
                 guard attempt == token, !Task.isCancelled else { return }
-                complete(text, session: session)
+                complete(result, session: session)
             } catch {
                 guard attempt == token, !Task.isCancelled else { return }
                 fail(error.localizedDescription, session: session, token: token)
@@ -162,7 +174,7 @@ final class DictationController {
         guard isActive else { return }
         abandonSession()
         phase = .idle
-        transcript = ""
+        document = DictationTranscript()
         canRetry = false
         delivery = .insert
         onDidEnd?()
@@ -170,6 +182,7 @@ final class DictationController {
 
     private func abandonSession() {
         pendingFinish = nil
+        editingWordID = nil
         attempt += 1
         operation?.cancel()
         operation = nil
@@ -185,9 +198,9 @@ final class DictationController {
     }
 
     private func bind(_ session: any DictationEngineSession, token: Int) {
-        session.onTranscript = { [weak self] text in
+        session.onTranscript = { [weak self] incoming in
             guard let self, attempt == token, phase.isBusy else { return }
-            transcript = text
+            document = document.merging(incoming)
         }
         session.onVolume = { [weak self] level in
             guard let self, attempt == token, phase == .recording else { return }
@@ -200,17 +213,58 @@ final class DictationController {
         }
     }
 
-    private func complete(_ text: String, session: any DictationEngineSession) {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+    private func complete(_ result: DictationTranscript, session: any DictationEngineSession) {
+        // Corrections you made in the notch outrank the engine's own text.
+        let merged = document.merging(result)
+        let corrected = words?.apply(to: merged.text) ?? merged.text
+        let trimmed = corrected.trimmingCharacters(in: .whitespacesAndNewlines)
         let action = delivery
         session.discardRecording()
         session.onError = nil
         phase = .idle
-        transcript = trimmed
+        document = DictationTranscript(settledText: trimmed)
+        editingWordID = nil
         canRetry = false
         engine = nil
         delivery = .insert
         if trimmed.isEmpty { onDidEnd?() } else { deliverText(trimmed, action) }
+    }
+
+    // MARK: Correcting a word
+
+    /// Opens the correction popover and pauses the microphone, so what you type is not transcribed.
+    func beginEditing(_ id: UUID) {
+        guard phase == .recording, document.word(id) != nil else { return }
+        editingWordID = id
+        engine?.setCapturePaused(true)
+    }
+
+    /// Closes the popover and hands the microphone back.
+    func cancelEditing() {
+        guard editingWordID != nil else { return }
+        editingWordID = nil
+        engine?.setCapturePaused(false)
+    }
+
+    /// Replaces the word being edited and teaches it. A word the recogniser already doubted, or a
+    /// replacement taken from its own alternatives, is trusted at once; anything else waits for a
+    /// second sighting so one rewording never becomes a permanent rule.
+    func applyEdit(_ replacement: String) {
+        guard let id = editingWordID, let word = document.word(id) else { return }
+        let trimmed = replacement.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { cancelEditing(); return }
+        let trusted = word.isUncertain || word.alternatives.contains(trimmed)
+        if let previous = document.replace(id, with: trimmed) {
+            words?.record(heard: previous, meant: trimmed, confirmed: trusted)
+        }
+        cancelEditing()
+    }
+
+    /// Drops the word. Deletions teach nothing about spelling, so nothing is stored.
+    func removeEditingWord() {
+        guard let id = editingWordID else { return }
+        document.remove(id)
+        cancelEditing()
     }
 
     private func fail(_ message: String, session: any DictationEngineSession, token: Int) {

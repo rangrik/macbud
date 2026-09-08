@@ -16,6 +16,7 @@ final class PanelCoordinator {
     let screenshots: ScreenshotsSectionController
     let dictation: DictationController
     let dictationHistoryStore: DictationHistoryStore
+    let dictationWordStore: DictationWordStore
     let dictationHistory: DictationHistorySectionController
     let appIndex: AppIndex
     let apps: AppsSectionController
@@ -42,8 +43,10 @@ final class PanelCoordinator {
         snippets = SnippetsSectionController(store: snippetStore, clipboard: clipboardStore, context: context)
         screenshots = ScreenshotsSectionController(library: library, context: context)
         dictationHistoryStore = DictationHistoryStore(dataStore: snippetStore.dataStore)
+        dictationWordStore = DictationWordStore(dataStore: snippetStore.dataStore)
         dictationHistory = DictationHistorySectionController(store: dictationHistoryStore, context: context, snippets: snippets)
-        dictation = DictationController(settings: settings, context: context, clipboard: clipboardStore, history: dictationHistoryStore)
+        dictation = DictationController(settings: settings, context: context, clipboard: clipboardStore,
+                                        history: dictationHistoryStore, words: dictationWordStore)
         apps = AppsSectionController(index: appIndex, context: context)
         clipboard.snippets = snippets
         dictation.onDidEnd = { [weak self] in self?.notch.close() }
@@ -197,7 +200,8 @@ final class PanelCoordinator {
     func handle(_ command: PanelCommand) -> Bool {
         if state.isDictating {
             switch command {
-            case .close: dictation.cancel()
+            case .close:
+                if dictation.isEditingWord { dictation.cancelEditing() } else { dictation.cancel() }
             case .startDictation:
                 if dictation.canRetry { dictation.retry() } else { dictation.finish(.insert) }
             default: return false
@@ -479,7 +483,11 @@ final class HotKeyBinder {
         escapeID = nil
         sessionTriggerID = nil
         guard active else { return }
-        escapeMonitor.start { [weak self] in self?.coordinator.dictation.cancel() }
+        escapeMonitor.start { [weak self] in
+            guard let dictation = self?.coordinator.dictation else { return }
+            // While a word is open for correction, Escape backs out of the word, not the recording.
+            if dictation.isEditingWord { dictation.cancelEditing() } else { dictation.cancel() }
+        }
         do {
             escapeID = try center.register(HotKey(keyCode: 53, modifiers: [])) { [weak self] in
                 self?.coordinator.dictation.cancel()

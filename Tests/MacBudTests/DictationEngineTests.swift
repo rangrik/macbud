@@ -94,13 +94,13 @@ import Testing
         try source.append(makeBuffer(sample: 0))
         source.close()
         let engine = DictationEngine(recordingDirectory: directory)
-        #expect(try await engine.transcribe(file: source.url, locale: Locale(identifier: "en-US")) == "")
+        #expect(try await engine.transcribe(file: source.url, locale: Locale(identifier: "en-US")).isEmpty)
         #expect(engine.canRetry)
         let retainedFiles = try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
         #expect(retainedFiles.count == 1)
         await engine.suspend()
         #expect(engine.canRetry)
-        #expect(try await engine.retry() == "")
+        #expect(try await engine.retry().isEmpty)
         #expect(try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil) == retainedFiles)
         engine.discardRecording()
         #expect(!engine.canRetry)
@@ -136,7 +136,7 @@ import Testing
         source.close()
         let engine = DictationEngine(recordingDirectory: directory)
         var delivered: [String] = []
-        engine.onTranscript = { delivered.append($0) }
+        engine.onTranscript = { delivered.append($0.text) }
         let importTask = Task { try await engine.transcribe(file: source.url, locale: Locale(identifier: "en-US")) }
         // Import publishes its saved frames before yielding between chunks.
         while !engine.canRetry { await Task.yield() }

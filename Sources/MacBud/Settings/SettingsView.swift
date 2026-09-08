@@ -19,7 +19,7 @@ struct SettingsView: View {
                 Tab("Screenshots", systemImage: "photo.on.rectangle.angled") { ScreenshotSettings(settings: app.settings, library: app.library) }
             }
             if app.settings.isEnabled(.dictation) {
-                Tab("Dictation", systemImage: "mic") { DictationSettings(settings: app.settings) }
+                Tab("Dictation", systemImage: "mic") { DictationSettings(settings: app.settings, words: app.coordinator?.dictationWordStore) }
             }
             Tab("About", systemImage: "info.circle") { AboutView() }
         }
