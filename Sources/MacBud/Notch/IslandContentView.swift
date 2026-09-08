@@ -9,16 +9,29 @@ struct IslandContentView: View {
     var body: some View {
         let notchWidth = state.geometry.notchRect.width
         let sideWidth = (state.metrics.islandSize.width - notchWidth) / 2
+        let sections = coordinator.settings.enabledSections
+        // The right band shares its space with the status area, whose width we measure rather than
+        // guess — a stale guess would either hide a tab or refuse a split that would have fitted.
+        let plan = SectionTabLayout.plan(sections, selected: state.section,
+                                         leftWidth: sideWidth - 14,
+                                         rightWidth: sideWidth - 18 - state.headerStatusWidth - 10)
         VStack(spacing: 0) {
             HStack(spacing: 0) {
-                SectionTabs(sections: coordinator.settings.enabledSections, selected: state.section,
+                SectionTabs(sections: indexed(plan.left, in: sections), selected: state.section,
+                            showsLabel: plan.showsLabel,
                             shortcut: { coordinator.sectionShortcut(at: $0) }) { coordinator.select($0) }
                     .padding(.leading, 14)
                     .frame(width: sideWidth, alignment: .leading)
                 Spacer().frame(width: notchWidth)
-                HeaderStatus(coordinator: coordinator)
-                    .padding(.trailing, 18)
-                    .frame(width: sideWidth, alignment: .trailing)
+                HStack(spacing: 10) {
+                    SectionTabs(sections: indexed(plan.right, in: sections), selected: state.section,
+                                showsLabel: plan.showsLabel,
+                                shortcut: { coordinator.sectionShortcut(at: $0) }) { coordinator.select($0) }
+                    HeaderStatus(coordinator: coordinator)
+                        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { state.headerStatusWidth = $0 }
+                }
+                .padding(.trailing, 18)
+                .frame(width: sideWidth, alignment: .trailing)
             }
             .frame(height: state.geometry.notchRect.height)
 
@@ -44,6 +57,11 @@ struct IslandContentView: View {
         .onChange(of: state.query) { coordinator.queryChanged() }
     }
 
+    /// Tabs keep their position in the full list so the ⌘-number shortcuts stay put across a split.
+    private func indexed(_ run: [Section], in all: [Section]) -> [(index: Int, section: Section)] {
+        run.compactMap { section in all.firstIndex(of: section).map { (index: $0, section: section) } }
+    }
+
     @ViewBuilder private var sectionBody: some View {
         switch state.section {
         case .clipboard: ClipboardSectionView(controller: coordinator.clipboard)
@@ -56,8 +74,11 @@ struct IslandContentView: View {
 }
 
 struct SectionTabs: View {
-    let sections: [Section]
+    /// Each tab keeps its position in the full list, so ⌘-number shortcuts survive a split.
+    let sections: [(index: Int, section: Section)]
     let selected: Section
+    /// False when neither band is wide enough for the selected tab's label.
+    var showsLabel = true
     /// The chord that opens each tab position, so a tooltip can say which one this tab answers to.
     let shortcut: (Int) -> String?
     let onSelect: (Section) -> Void
@@ -65,19 +86,19 @@ struct SectionTabs: View {
     var body: some View {
         GlassEffectContainer(spacing: 6) {
             HStack(spacing: 4) {
-                ForEach(Array(sections.enumerated()), id: \.element) { index, section in
+                ForEach(sections, id: \.section) { index, section in
                     let isSelected = section == selected
                     Button { onSelect(section) } label: {
                     HStack(spacing: 6) {
                         FeatureBadge(kind: section.artwork, size: 19)
-                        if isSelected {
+                        if isSelected, showsLabel {
                             Text(section.title)
                                 .font(.system(size: 11.5, weight: .semibold))
                                 .fixedSize()
                         }
                     }
                     .foregroundStyle(isSelected ? Theme.textPrimary : Theme.textTertiary)
-                    .padding(.horizontal, isSelected ? 10 : 8)
+                    .padding(.horizontal, isSelected && showsLabel ? 10 : 8)
                     .frame(height: 24)
                     .glassEffect(isSelected ? .regular.tint(.white.opacity(0.16)) : .identity, in: .capsule)
                     .contentShape(Capsule())

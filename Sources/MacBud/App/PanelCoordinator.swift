@@ -364,6 +364,15 @@ final class PanelCoordinator {
             "installedInApplications": AppDelegate.isInstalledInApplications,
             "bundlePath": Bundle.main.bundleURL.path,
             "showsTab": notch.showsTab,
+            "tabPlan": {
+                let sections = settings.enabledSections
+                let side = (state.metrics.islandSize.width - state.geometry.notchRect.width) / 2
+                let plan = SectionTabLayout.plan(sections, selected: state.section, leftWidth: side - 14,
+                                                 rightWidth: side - 18 - state.headerStatusWidth - 10)
+                return ["left": plan.left.map(\.rawValue), "right": plan.right.map(\.rawValue),
+                        "showsLabel": plan.showsLabel, "sideWidth": side,
+                        "headerStatusWidth": state.headerStatusWidth]
+            }(),
             "sectionHotKeys": Dictionary(uniqueKeysWithValues: settings.sectionHotKeys.map { ($0.key.rawValue, $0.value.displayString) }),
             "registeredSectionHotKeys": Dictionary(uniqueKeysWithValues: (hotKeys?.registeredSectionHotKeys ?? [:]).map { ($0.key.rawValue, $0.value.displayString) }),
             "sectionHotKeyProblems": Dictionary(uniqueKeysWithValues: (hotKeys?.sectionProblems ?? [:]).map { ($0.key.rawValue, $0.value) }),
