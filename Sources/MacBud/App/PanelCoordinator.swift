@@ -20,6 +20,7 @@ final class PanelCoordinator {
     let dictationHistory: DictationHistorySectionController
     let appIndex: AppIndex
     let apps: AppsSectionController
+    let windowPreviews: WindowPreviewCache
     private(set) var isHoldingToTalk = false
     private(set) var dictationSessionHotKey: HotKey?
     let keepAwake = KeepAwakeController()
@@ -47,7 +48,9 @@ final class PanelCoordinator {
         dictationHistory = DictationHistorySectionController(store: dictationHistoryStore, context: context, snippets: snippets)
         dictation = DictationController(settings: settings, context: context, clipboard: clipboardStore,
                                         history: dictationHistoryStore, words: dictationWordStore)
-        apps = AppsSectionController(index: appIndex, context: context)
+        let previews = WindowPreviewCache()
+        windowPreviews = previews
+        apps = AppsSectionController(index: appIndex, context: context, previews: previews)
         clipboard.snippets = snippets
         dictation.onDidEnd = { [weak self] in self?.notch.close() }
         dictation.onActivityChanged = { [weak self] active in

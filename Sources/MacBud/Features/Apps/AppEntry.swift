@@ -32,14 +32,16 @@ nonisolated struct AppGrid: Sendable {
     struct Group: Sendable {
         let title: String
         let items: [AppEntry]
+        /// Recent narrows to make room for the preview pane; All always has the full width.
+        let columns: Int
     }
 
     let groups: [Group]
-    let columns: Int
 
-    init(groups: [Group], columns: Int) {
-        self.groups = groups.filter { !$0.items.isEmpty }
-        self.columns = max(1, columns)
+    init(groups: [Group]) {
+        self.groups = groups.filter { !$0.items.isEmpty }.map {
+            Group(title: $0.title, items: $0.items, columns: max(1, $0.columns))
+        }
     }
 
     /// Flat display order across every group — the order arrow keys and the selection index use.
@@ -52,8 +54,8 @@ nonisolated struct AppGrid: Sendable {
         var result: [[Int]] = []
         var offset = 0
         for group in groups {
-            for start in stride(from: 0, to: group.items.count, by: columns) {
-                let end = min(start + columns, group.items.count)
+            for start in stride(from: 0, to: group.items.count, by: group.columns) {
+                let end = min(start + group.columns, group.items.count)
                 result.append(Array((offset + start)..<(offset + end)))
             }
             offset += group.items.count
@@ -84,4 +86,19 @@ nonisolated struct AppGrid: Sendable {
     }
 
     func firstIndex(of entry: AppEntry) -> Int? { items.firstIndex(where: { $0.id == entry.id }) }
+
+    /// Which group a flat selection index sits in, or nil when the grid is empty.
+    func groupIndex(of index: Int) -> Int? {
+        var offset = 0
+        for (position, group) in groups.enumerated() {
+            if index < offset + group.items.count { return position }
+            offset += group.items.count
+        }
+        return nil
+    }
+
+    /// Flat index where each group starts.
+    var offsets: [Int] {
+        groups.dropLast().reduce(into: [0]) { result, group in result.append(result.last! + group.items.count) }
+    }
 }

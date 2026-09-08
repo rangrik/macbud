@@ -14,25 +14,59 @@ final class AppsSectionController {
     private(set) var windows: [WindowEntry] = []
     private var windowsByID: [String: WindowEntry] = [:]
 
+    /// Recent narrows to four while the preview pane is up, and matches All at six when it is not.
+    static let previewColumns = 4
     static let columns = 6
     static let recentLimit = 10
     static let openLimit = 12
 
-    init(index: AppIndex, context: ActionContext) {
+    let previews: WindowPreviewCache
+
+    init(index: AppIndex, context: ActionContext, previews: WindowPreviewCache) {
         self.index = index
         self.context = context
+        self.previews = previews
     }
 
     var query: String { context.state.query }
 
-    var grid: AppGrid {
+    var grid: AppGrid { grid(showingPreview: showsPreview) }
+
+    /// The pane is up whenever the selection is in Recent, so Recent has to be laid out narrower —
+    /// which is itself decided by where the selection is. Resolved by laying the grid out at the
+    /// full width first and asking that copy which group the selection landed in.
+    var showsPreview: Bool {
+        guard query.isEmpty else { return false }
+        return grid(showingPreview: false).groupIndex(of: selectedIndex) == 0
+    }
+
+    private func grid(showingPreview: Bool) -> AppGrid {
         guard query.isEmpty else {
-            return AppGrid(groups: [.init(title: "Results", items: searchResults)], columns: Self.columns)
+            return AppGrid(groups: [.init(title: "Results", items: searchResults, columns: Self.columns)])
         }
         let open = Array(openWindows.prefix(Self.openLimit))
         let recent = Self.recentApps(index.installed, excluding: Set(open.map(\.bundleID)), limit: Self.recentLimit)
-        return AppGrid(groups: [.init(title: "Recent", items: open), .init(title: "All", items: recent)],
-                       columns: Self.columns)
+        return AppGrid(groups: [
+            .init(title: "Recent", items: open, columns: showingPreview ? Self.previewColumns : Self.columns),
+            .init(title: "All", items: recent, columns: Self.columns),
+        ])
+    }
+
+    /// The window the preview pane is showing, if the selection is one.
+    var selectedWindow: WindowEntry? {
+        selected?.windowID.flatMap { windowsByID[$0] }
+    }
+
+    /// The line under the preview: which app, and which of its windows this is. Never repeats the
+    /// title above it — a single-window app already says its name there.
+    var previewSubtitle: String {
+        guard let entry = selected else { return "" }
+        guard let window = selectedWindow else { return entry.isRunning ? "Open" : "Not open · Return launches it" }
+        let siblings = windows.filter { $0.bundleID == window.bundleID }
+        guard siblings.count > 1, let position = siblings.firstIndex(of: window) else {
+            return entry.displayName == entry.name ? "Open" : entry.name
+        }
+        return "\(entry.name) · window \(position + 1) of \(siblings.count)"
     }
 
     /// One tile per open window, so two Chrome windows are two things you can land on. Apps come in
@@ -114,6 +148,7 @@ final class AppsSectionController {
     func didShow() {
         index.refresh()
         windows = WindowIndex.windows()
+        previews.clear()
         windowsByID = Dictionary(windows.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         // Start on the app you would switch to, not the one you are already in: ⌥⇧A + ↩ jumps back.
         let current = context.frontmost.previousApp?.bundleIdentifier

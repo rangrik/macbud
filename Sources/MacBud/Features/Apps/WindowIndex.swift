@@ -6,6 +6,9 @@ import ApplicationServices
 /// stale as soon as it is used. Identity is the element's own hash, which outlives the reordering.
 struct WindowEntry: Identifiable, Equatable {
     let element: AXUIElement
+    /// Owner and on-screen rect, which is how a window is matched to its ScreenCaptureKit twin.
+    let pid: pid_t
+    var frame: CGRect = .zero
     let bundleID: String
     let appName: String
     let appURL: URL
@@ -44,7 +47,9 @@ enum WindowIndex {
             let focused = focusedWindow(AXUIElementCreateApplication(app.processIdentifier))
             return elements(for: app).prefix(limitPerApp).compactMap { element in
                 guard isRealWindow(element) else { return nil }
-                return WindowEntry(element: element, bundleID: bundleID, appName: name, appURL: url,
+                return WindowEntry(element: element, pid: app.processIdentifier,
+                                   frame: frame(element) ?? .zero,
+                                   bundleID: bundleID, appName: name, appURL: url,
                                    title: string(element, kAXTitleAttribute) ?? "",
                                    isMinimized: bool(element, kAXMinimizedAttribute) ?? false,
                                    isFocused: focused.map { CFEqual($0, element) } ?? false)
@@ -150,6 +155,11 @@ enum WindowIndex {
         var value: CFTypeRef?
         guard AXUIElementCopyAttributeValue(element, attribute as CFString, &value) == .success else { return nil }
         return (value as? NSNumber)?.boolValue
+    }
+
+    static func frame(_ element: AXUIElement) -> CGRect? {
+        guard let origin = position(element), let size = size(element) else { return nil }
+        return CGRect(origin: origin, size: size)
     }
 
     private static func position(_ element: AXUIElement) -> CGPoint? {
