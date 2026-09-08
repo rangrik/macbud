@@ -60,6 +60,8 @@ final class NotchState {
     var notchStatusSymbol: String?
     var keepsAwake = false
     var tabHovered = false
+    /// Measured width of the status area, so the tab strip knows what the right band has left.
+    var headerStatusWidth: CGFloat = 0
 
     init(geometry: NotchGeometry) {
         self.geometry = geometry

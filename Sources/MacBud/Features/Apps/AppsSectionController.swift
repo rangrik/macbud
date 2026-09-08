@@ -9,32 +9,92 @@ final class AppsSectionController {
     let index: AppIndex
     let context: ActionContext
     var selectedIndex = 0
+    /// Read once when the panel opens; enumerating every app's windows is too slow to redo per
+    /// keystroke. Keyed so a tile can name its window without carrying the accessibility handle.
+    private(set) var windows: [WindowEntry] = []
+    private var windowsByID: [String: WindowEntry] = [:]
 
+    /// Recent narrows to four while the preview pane is up, and matches All at six when it is not.
+    static let previewColumns = 4
     static let columns = 6
     static let recentLimit = 10
     static let openLimit = 12
 
-    init(index: AppIndex, context: ActionContext) {
+    let previews: WindowPreviewCache
+
+    init(index: AppIndex, context: ActionContext, previews: WindowPreviewCache) {
         self.index = index
         self.context = context
+        self.previews = previews
     }
 
     var query: String { context.state.query }
 
-    var grid: AppGrid {
+    var grid: AppGrid { grid(showingPreview: showsPreview) }
+
+    /// The pane is up whenever the selection is in Recent, so Recent has to be laid out narrower —
+    /// which is itself decided by where the selection is. Resolved by laying the grid out at the
+    /// full width first and asking that copy which group the selection landed in.
+    var showsPreview: Bool {
+        guard query.isEmpty else { return false }
+        return grid(showingPreview: false).groupIndex(of: selectedIndex) == 0
+    }
+
+    private func grid(showingPreview: Bool) -> AppGrid {
         guard query.isEmpty else {
-            return AppGrid(groups: [.init(title: "Results", items: searchResults)], columns: Self.columns)
+            return AppGrid(groups: [.init(title: "Results", items: searchResults, columns: Self.columns)])
         }
-        let open = Array(Self.byLastVisit(index.running).prefix(Self.openLimit))
+        let open = Array(openWindows.prefix(Self.openLimit))
         let recent = Self.recentApps(index.installed, excluding: Set(open.map(\.bundleID)), limit: Self.recentLimit)
-        return AppGrid(groups: [.init(title: "Recent", items: open), .init(title: "All", items: recent)],
-                       columns: Self.columns)
+        return AppGrid(groups: [
+            .init(title: "Recent", items: open, columns: showingPreview ? Self.previewColumns : Self.columns),
+            .init(title: "All", items: recent, columns: Self.columns),
+        ])
+    }
+
+    /// The window the preview pane is showing, if the selection is one.
+    var selectedWindow: WindowEntry? {
+        selected?.windowID.flatMap { windowsByID[$0] }
+    }
+
+    /// The line under the preview: which app, and which of its windows this is. Never repeats the
+    /// title above it — a single-window app already says its name there.
+    var previewSubtitle: String {
+        guard let entry = selected else { return "" }
+        guard let window = selectedWindow else { return entry.isRunning ? "Open" : "Not open · Return launches it" }
+        let siblings = windows.filter { $0.bundleID == window.bundleID }
+        guard siblings.count > 1, let position = siblings.firstIndex(of: window) else {
+            return entry.displayName == entry.name ? "Open" : entry.name
+        }
+        return "\(entry.name) · window \(position + 1) of \(siblings.count)"
+    }
+
+    /// One tile per open window, so two Chrome windows are two things you can land on. Apps come in
+    /// the order you last visited them, each app's windows in its own front-to-back order.
+    var openWindows: [AppEntry] {
+        Self.expand(Self.byLastVisit(index.running), windows: windows)
+    }
+
+    /// An app that exposes no windows still gets its single app tile — Chromium apps hide their
+    /// window list, and vanishing from the switcher would be far worse than showing one entry.
+    static func expand(_ running: [AppEntry], windows: [WindowEntry]) -> [AppEntry] {
+        let byApp = Dictionary(grouping: windows, by: \.bundleID)
+        return running.flatMap { app -> [AppEntry] in
+            guard let open = byApp[app.bundleID], !open.isEmpty else { return [app] }
+            return open.map { window in
+                var entry = app
+                entry.windowID = window.id
+                // Only name the window when there is a choice to make between windows.
+                entry.label = open.count > 1 ? window.shortTitle : nil
+                return entry
+            }
+        }
     }
 
     /// Window stacking is a decent guess at "last visited", but an app whose windows are all
     /// minimised or parked on another Space falls out of it and lands in launch order instead.
     /// A recorded visit beats the guess wherever we have one.
-    nonisolated static func byLastVisit(_ entries: [AppEntry]) -> [AppEntry] {
+    static func byLastVisit(_ entries: [AppEntry]) -> [AppEntry] {
         entries.enumerated()
             .sorted { left, right in
                 switch (left.element.lastUsed, right.element.lastUsed) {
@@ -48,7 +108,7 @@ final class AppsSectionController {
     }
 
     /// Apps you have actually used, most recent first, minus the ones already shown in the top group.
-    nonisolated static func recentApps(_ installed: [AppEntry], excluding excluded: Set<String>, limit: Int) -> [AppEntry] {
+    static func recentApps(_ installed: [AppEntry], excluding excluded: Set<String>, limit: Int) -> [AppEntry] {
         installed
             .filter { !excluded.contains($0.bundleID) && $0.lastUsed != nil }
             .sorted { ($0.lastUsed ?? .distantPast) > ($1.lastUsed ?? .distantPast) }
@@ -63,16 +123,16 @@ final class AppsSectionController {
         return (isRunning ? 60 : 0) + frequency
     }
 
+    /// Open windows first-class in search too, so typing "chrome" offers both Chrome windows and
+    /// typing part of a window title goes straight to that window.
     private var searchResults: [AppEntry] {
-        let running = Dictionary(index.running.map { ($0.bundleID, $0) }, uniquingKeysWith: { first, _ in first })
-        var pool = index.installed
-        for entry in index.running where !pool.contains(where: { $0.bundleID == entry.bundleID }) { pool.append(entry) }
-        return SearchMatcher.rank(pool, query: query, text: \.name)
+        let open = openWindows
+        let openApps = Set(open.map(\.bundleID))
+        let pool = open + index.installed.filter { !openApps.contains($0.bundleID) }
+        return SearchMatcher.rank(pool, query: query, text: \.searchText)
             .map { result -> (entry: AppEntry, score: Int) in
                 var entry = result.item
-                entry.isRunning = running[entry.bundleID] != nil
-                // The running copy carries a freshly read date; the scanned one can be minutes old.
-                if let live = running[entry.bundleID]?.lastUsed { entry.lastUsed = live }
+                entry.isRunning = openApps.contains(entry.bundleID)
                 return (entry, result.match.score + Self.rankingBonus(isRunning: entry.isRunning, useCount: entry.useCount))
             }
             .sorted { $0.score > $1.score }
@@ -87,6 +147,9 @@ final class AppsSectionController {
 
     func didShow() {
         index.refresh()
+        windows = WindowIndex.windows()
+        previews.clear()
+        windowsByID = Dictionary(windows.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         // Start on the app you would switch to, not the one you are already in: ⌥⇧A + ↩ jumps back.
         let current = context.frontmost.previousApp?.bundleIdentifier
         selectedIndex = grid.items.firstIndex { $0.bundleID != current } ?? 0
@@ -114,10 +177,18 @@ final class AppsSectionController {
         return true
     }
 
-    /// Focus a running app rather than relaunching it; `openApplication` covers the rest and also
-    /// catches the case where the running copy refuses to come forward.
+    /// Jump to the exact window when the tile is one, otherwise focus a running app rather than
+    /// relaunching it; `openApplication` covers the rest and also catches the case where the
+    /// running copy refuses to come forward.
     func activate(_ entry: AppEntry) {
-        context.notch.close()
+        // Switch first, close second. Closing the panel hands focus back to whatever app you came
+        // from, and that lands after our activation if we close first — leaving the right window
+        // raised inside an app that never came forward.
+        defer { context.notch.close() }
+        if let window = entry.windowID.flatMap({ windowsByID[$0] }), WindowIndex.raise(window) {
+            Log.app.info("apps: raised \(window.appName) · \(window.displayTitle)")
+            return
+        }
         if let running = NSRunningApplication.runningApplications(withBundleIdentifier: entry.bundleID).first,
            running.activate(options: [.activateAllWindows]) {
             Log.app.info("apps: focused \(entry.name)")

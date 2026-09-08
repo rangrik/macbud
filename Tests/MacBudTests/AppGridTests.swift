@@ -8,10 +8,10 @@ import Foundation
         AppEntry(bundleID: "com.test.\(name)", name: name, url: URL(fileURLWithPath: "/Applications/\(name).app"))
     }
 
-    private func grid(open: Int, recent: Int, columns: Int = 3) -> AppGrid {
-        AppGrid(groups: [.init(title: "Open now", items: (0..<open).map { entry("open\($0)") }),
-                         .init(title: "Recent", items: (0..<recent).map { entry("recent\($0)") })],
-                columns: columns)
+    private func grid(open: Int, recent: Int, columns: Int = 3, recentColumns: Int? = nil) -> AppGrid {
+        AppGrid(groups: [.init(title: "Recent", items: (0..<open).map { entry("open\($0)") }, columns: columns),
+                         .init(title: "All", items: (0..<recent).map { entry("recent\($0)") },
+                               columns: recentColumns ?? columns)])
     }
 
     @Test func groupsNeverShareARow() {
@@ -48,8 +48,24 @@ import Foundation
         #expect(g.index(from: 5, columns: 1) == 5)
     }
 
+    @Test func groupsCanUseDifferentColumnCounts() {
+        // Recent narrows to 2 for the preview pane while All stays at 4: [0,1] | [2,3] | [4,5,6,7]
+        let g = grid(open: 4, recent: 4, columns: 2, recentColumns: 4)
+        #expect(g.rows == [[0, 1], [2, 3], [4, 5, 6, 7]])
+        #expect(g.groupIndex(of: 3) == 0)
+        #expect(g.groupIndex(of: 4) == 1)
+        #expect(g.offsets == [0, 4])
+        // Down from the last Recent row crosses into All, keeping the column.
+        #expect(g.index(from: 3, rows: 1) == 5)
+    }
+
+    @Test func groupIndexIsNilPastTheEnd() {
+        #expect(grid(open: 2, recent: 2).groupIndex(of: 9) == nil)
+        #expect(AppGrid(groups: []).groupIndex(of: 0) == nil)
+    }
+
     @Test func navigationOnAnEmptyGridIsSafe() {
-        let g = AppGrid(groups: [], columns: 3)
+        let g = AppGrid(groups: [])
         #expect(g.isEmpty)
         #expect(g.index(from: 4, rows: 1) == 0)
     }

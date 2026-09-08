@@ -20,6 +20,7 @@ final class PanelCoordinator {
     let dictationHistory: DictationHistorySectionController
     let appIndex: AppIndex
     let apps: AppsSectionController
+    let windowPreviews: WindowPreviewCache
     private(set) var isHoldingToTalk = false
     private(set) var dictationSessionHotKey: HotKey?
     let keepAwake = KeepAwakeController()
@@ -47,7 +48,9 @@ final class PanelCoordinator {
         dictationHistory = DictationHistorySectionController(store: dictationHistoryStore, context: context, snippets: snippets)
         dictation = DictationController(settings: settings, context: context, clipboard: clipboardStore,
                                         history: dictationHistoryStore, words: dictationWordStore)
-        apps = AppsSectionController(index: appIndex, context: context)
+        let previews = WindowPreviewCache()
+        windowPreviews = previews
+        apps = AppsSectionController(index: appIndex, context: context, previews: previews)
         clipboard.snippets = snippets
         dictation.onDidEnd = { [weak self] in self?.notch.close() }
         dictation.onActivityChanged = { [weak self] active in
@@ -334,7 +337,9 @@ final class PanelCoordinator {
         case .dictationHistory:
             hints = [hint(copy, "Copy", systemImage: "doc.on.doc"), hint(paste, "Insert"), hint(.saveAsSnippet, "Save as snippet"), hint(.delete, "Delete")]
         case .apps:
-            hints = [hint(.primaryAction, apps.selected?.isRunning == true ? "Switch to app" : "Open app", systemImage: "arrow.up.forward.app"),
+            let target = apps.selected
+            let verb = target?.windowID != nil ? "Switch to window" : target?.isRunning == true ? "Switch to app" : "Open app"
+            hints = [hint(.primaryAction, verb, systemImage: "arrow.up.forward.app"),
                      Hint(keys: "↑↓←→", label: "Move", command: nil)]
         }
         if !snippets.isEditing { hints.append(hint(.nextSection, "Section")) }
@@ -365,6 +370,16 @@ final class PanelCoordinator {
             "installedInApplications": AppDelegate.isInstalledInApplications,
             "bundlePath": Bundle.main.bundleURL.path,
             "showsTab": notch.showsTab,
+            "frontmostApp": NSWorkspace.shared.frontmostApplication?.localizedName ?? "",
+            "tabPlan": {
+                let sections = settings.enabledSections
+                let side = (state.metrics.islandSize.width - state.geometry.notchRect.width) / 2
+                let plan = SectionTabLayout.plan(sections, selected: state.section, leftWidth: side - 14,
+                                                 rightWidth: side - 18 - state.headerStatusWidth - 10)
+                return ["left": plan.left.map(\.rawValue), "right": plan.right.map(\.rawValue),
+                        "showsLabel": plan.showsLabel, "sideWidth": side,
+                        "headerStatusWidth": state.headerStatusWidth]
+            }(),
             "sectionHotKeys": Dictionary(uniqueKeysWithValues: settings.sectionHotKeys.map { ($0.key.rawValue, $0.value.displayString) }),
             "registeredSectionHotKeys": Dictionary(uniqueKeysWithValues: (hotKeys?.registeredSectionHotKeys ?? [:]).map { ($0.key.rawValue, $0.value.displayString) }),
             "sectionHotKeyProblems": Dictionary(uniqueKeysWithValues: (hotKeys?.sectionProblems ?? [:]).map { ($0.key.rawValue, $0.value) }),
@@ -398,9 +413,11 @@ final class PanelCoordinator {
         case .apps:
             let grid = apps.grid
             d["selectedIndex"] = apps.selectedIndex
-            d["results"] = grid.items.prefix(30).map(\.name)
-            d["selected"] = apps.selected?.name ?? ""
-            d["appGroups"] = grid.groups.map { ["title": $0.title, "items": $0.items.map(\.name)] }
+            d["results"] = grid.items.prefix(30).map(\.displayName)
+            d["selected"] = apps.selected?.displayName ?? ""
+            d["selectedWindow"] = apps.selected?.windowID ?? ""
+            d["appGroups"] = grid.groups.map { ["title": $0.title, "items": $0.items.map(\.displayName)] }
+            d["openWindows"] = apps.windows.map { ["app": $0.appName, "title": $0.shortTitle, "id": $0.id, "focused": $0.isFocused] }
             d["installedApps"] = appIndex.installed.count
         }
         return d
