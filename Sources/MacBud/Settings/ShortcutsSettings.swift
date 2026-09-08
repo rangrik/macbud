@@ -33,6 +33,9 @@ private struct GlobalShortcutsSection: View {
                     HotKeyRecorder(hotKey: sectionBinding(section), onRecordingChanged: suspendHotKeys)
                 }
                 .disabled(!settings.isEnabled(section.feature))
+                if let problem = hotKeys?.sectionProblems[section] {
+                    Label(problem, systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange).font(.callout)
+                }
             }
             LabeledContent("Toggle dictation / insert") {
                 HotKeyRecorder(hotKey: $settings.dictationHotKey, onRecordingChanged: suspendHotKeys)

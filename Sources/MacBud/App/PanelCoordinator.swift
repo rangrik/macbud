@@ -362,6 +362,9 @@ final class PanelCoordinator {
             "installedInApplications": AppDelegate.isInstalledInApplications,
             "bundlePath": Bundle.main.bundleURL.path,
             "showsTab": notch.showsTab,
+            "sectionHotKeys": Dictionary(uniqueKeysWithValues: settings.sectionHotKeys.map { ($0.key.rawValue, $0.value.displayString) }),
+            "registeredSectionHotKeys": Dictionary(uniqueKeysWithValues: (hotKeys?.registeredSectionHotKeys ?? [:]).map { ($0.key.rawValue, $0.value.displayString) }),
+            "sectionHotKeyProblems": Dictionary(uniqueKeysWithValues: (hotKeys?.sectionProblems ?? [:]).map { ($0.key.rawValue, $0.value) }),
             "activeDisplay": notch.state.geometry.displayID,
             "displays": notch.screens.map { screen in
                 ["id": screen.displayID, "active": screen.isActive, "physicalNotch": screen.geometry.hasPhysicalNotch,
@@ -410,6 +413,8 @@ final class HotKeyBinder {
     private(set) var toggleProblem: String?
     private(set) var dictationProblem: String?
     private(set) var holdToTalkProblem: String?
+    private(set) var sectionProblems: [Section: String] = [:]
+    private(set) var registeredSectionHotKeys: [Section: HotKey] = [:]
     private var escapeID: UInt32?
     private var sessionTriggerID: UInt32?
     private let escapeMonitor = DictationEscapeMonitor()
@@ -430,6 +435,8 @@ final class HotKeyBinder {
         toggleProblem = nil
         dictationProblem = nil
         holdToTalkProblem = nil
+        sectionProblems = [:]
+        registeredSectionHotKeys = [:]
         if let wanted = settings.toggleHotKey {
             do {
                 try center.register(wanted) { [weak self] in self?.coordinator.toggle() }
@@ -444,8 +451,13 @@ final class HotKeyBinder {
             }
         }
         for (section, hotKey) in settings.sectionHotKeys where settings.isEnabled(section.feature) {
-            do { try center.register(hotKey) { [weak self] in self?.coordinator.open(section: section) } }
-            catch { Log.input.error("section hotkey \(section.rawValue) failed: \(error.localizedDescription)") }
+            do {
+                try center.register(hotKey) { [weak self] in self?.coordinator.open(section: section) }
+                registeredSectionHotKeys[section] = hotKey
+            } catch {
+                sectionProblems[section] = error.localizedDescription
+                Log.input.error("section hotkey \(section.rawValue) failed: \(error.localizedDescription)")
+            }
         }
         if settings.isEnabled(.dictation), let hotKey = settings.dictationHotKey {
             do { try center.register(hotKey) { [weak self] in self?.coordinator.startDictation(trigger: hotKey) } }
