@@ -42,7 +42,8 @@ Requires macOS 26 or later. Universal (Apple Silicon + Intel). Signed with an Ap
 certificate and **not notarized**, so macOS may block a downloaded copy.
 ```
 
-Commit as `Release X.Y.Z` with a one-line body naming the headline change.
+Commit as `Release X.Y.Z` with a one-line body naming the headline change, then run `make test`
+again. The pre-flight run predates this commit, so it did not cover what actually ships.
 
 ## 3. PR and merge
 
@@ -62,6 +63,7 @@ In a worktree you cannot check out `main`, so point the branch at the merged com
 git fetch origin
 git reset --hard origin/main
 git diff --stat HEAD origin/main   # must be empty
+make test                          # this tree is what gets packaged and installed
 ```
 
 ## 5. Package and install
@@ -98,6 +100,6 @@ One line of evidence each: test count, PR URL, merge commit, installed version, 
 
 ## Stop and ask
 
-- Tests fail, the tree is dirty, or `codesign --verify` fails.
+- Tests fail at any of the three points, the tree is dirty, or `codesign --verify` fails.
 - The active `gh` account cannot open the PR and switching accounts is denied.
 - `make install` reports MacBud is still running.
