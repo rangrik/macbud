@@ -43,7 +43,9 @@ struct GeneralSettings: View {
                 }
                 Text("⌘↩ always does the other one.").font(.caption).foregroundStyle(.secondary)
                 Toggle("Reopen the last used section", isOn: $settings.rememberLastSection)
-                Toggle("Show a clickable tab with an icon beside the notch", isOn: $settings.showNotchTab)
+                Toggle("Show a clickable notch tab on every display", isOn: $settings.showNotchTab)
+                Text("External displays get a drawn notch; the shortcut opens on the display you are working on.")
+                    .font(.caption).foregroundStyle(.secondary)
                 Toggle("Show a confirmation in the notch after copying", isOn: $settings.showToasts)
                 Toggle("Launch at login", isOn: $launchAtLogin)
                     .onChange(of: launchAtLogin) { _, on in

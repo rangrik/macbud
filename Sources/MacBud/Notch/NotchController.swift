@@ -1,28 +1,22 @@
 import AppKit
 import SwiftUI
 
-/// Owns the two windows that make up the notch experience:
-/// - `base`: always present over the notch; draws the idle notch and action toasts; catches clicks.
-/// - `panel`: the expanded island; key-capable, ordered out when collapsed.
 @Observable
 final class NotchController {
     let state: NotchState
     private(set) var panel: NotchPanel
-    private(set) var base: NotchBaseWindow
+    /// One entry per display, keyed by display id, so every screen carries its own notch.
+    private(set) var screens: [ScreenNotch] = []
     private var panelHost: NSHostingView<NotchRootView>?
-    /// Builds the island body. Set before `install()`.
     var contentProvider: (() -> IslandContentView)?
-    /// Builds the dictation pill body. Set before `install()`.
     var dictationProvider: (() -> AnyView)?
-    private var baseHost: ClickableHostingView<NotchBaseView>?
+    private var isInstalled = false
     private var collapseTask: Task<Void, Never>?
     private var toastTask: Task<Void, Never>?
     private var observers: [NSObjectProtocol] = []
     private var isSnapshotting = false
 
-    /// Installed by the app; return `true` to swallow the key event.
     var keyHandler: ((NSEvent) -> Bool)?
-    /// Called right before the island opens so callers can record the frontmost app etc.
     var willOpen: (() -> Void)?
     var didClose: (() -> Void)?
 
@@ -31,14 +25,19 @@ final class NotchController {
     static let toastAnimation: Animation = .spring(duration: 0.34, bounce: 0.2)
 
     init() {
-        let screen = NotchGeometry.preferredScreen()
-        let geometry = screen.map(NotchGeometry.detect(on:))
-            ?? NotchGeometry(screenFrame: CGRect(x: 0, y: 0, width: 1440, height: 900),
-                             notchRect: CGRect(x: 620, y: 868, width: 200, height: 32), hasPhysicalNotch: false)
+        let geometry = NotchGeometry.activeScreen().map(NotchGeometry.detect(on:)) ?? .fallback
         state = NotchState(geometry: geometry)
         panel = NotchPanel(contentRect: state.metrics.expandedWindowFrame(for: geometry))
-        base = NotchBaseWindow(contentRect: geometry.notchRect)
+        syncScreens()
     }
+
+    /// The notch on the display the panel is currently targeting.
+    var activeNotch: ScreenNotch {
+        screens.first { $0.displayID == state.geometry.displayID } ?? screens[0]
+    }
+
+    /// Kept so callers that only care about the display in front still read naturally.
+    var base: NotchBaseWindow { activeNotch.window }
 
     func install() {
         let panelHost = NotchHostingView(rootView: NotchRootView(state: state, controller: self, content: contentProvider, dictation: dictationProvider))
@@ -47,15 +46,10 @@ final class NotchController {
         panel.keyHandler = { [weak self] event in self?.keyHandler?(event) ?? false }
         self.panelHost = panelHost
 
-        let baseHost = ClickableHostingView(rootView: NotchBaseView(state: state, controller: self))
-        baseHost.sizingOptions = []
-        baseHost.sizingOptions = []
-        baseHost.onClick = { [weak self] in self?.tabClicked() }
-        baseHost.onHoverChange = { [weak self] hovering in self?.state.tabHovered = hovering }
-        base.contentView = baseHost
-        self.baseHost = baseHost
+        isInstalled = true
+        for screen in screens { installHost(on: screen) }
         applyBaseFrame()
-        base.orderFrontRegardless()
+        for screen in screens { screen.window.orderFrontRegardless() }
 
         let nc = NotificationCenter.default
         observers.append(nc.addObserver(forName: NSWindow.didResignKeyNotification, object: panel, queue: .main) { [weak self] _ in
@@ -69,24 +63,78 @@ final class NotchController {
                 Trace.log("app \(note.name.rawValue.replacingOccurrences(of: "NSApplication", with: "")) frontmost=\(NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "-")")
             })
         }
-        Log.notch.info("installed; notch=\(String(describing: self.state.geometry.notchRect)) physical=\(self.state.geometry.hasPhysicalNotch)")
+        Log.notch.info("installed; screens=\(self.screens.count) notch=\(String(describing: self.state.geometry.notchRect)) physical=\(self.state.geometry.hasPhysicalNotch)")
     }
 
-    // MARK: - Open / close
+    private func installHost(on screen: ScreenNotch) {
+        guard screen.host == nil else { return }
+        let host = ClickableHostingView(rootView: NotchBaseView(screen: screen, state: state, controller: self))
+        host.sizingOptions = []
+        host.onClick = { [weak self] in self?.tabClicked(on: screen) }
+        host.onHoverChange = { [weak self] hovering in self?.state.tabHovered = hovering }
+        screen.window.contentView = host
+        screen.host = host
+    }
+
+    // MARK: Screens
+
+    /// Rebuild the per-display notches after a display is plugged in, unplugged or rearranged.
+    private func syncScreens() {
+        let geometries = NSScreen.screens.map(NotchGeometry.detect(on:))
+        let live = geometries.isEmpty ? [NotchGeometry.fallback] : geometries
+        let liveIDs = Set(live.map(\.displayID))
+
+        for gone in screens where !liveIDs.contains(gone.displayID) {
+            gone.window.orderOut(nil)
+            gone.window.close()
+        }
+        screens.removeAll { !liveIDs.contains($0.displayID) }
+
+        for geometry in live {
+            if let existing = screens.first(where: { $0.displayID == geometry.displayID }) {
+                existing.geometry = geometry
+            } else {
+                let screen = ScreenNotch(geometry: geometry)
+                screens.append(screen)
+                if isInstalled {
+                    installHost(on: screen)
+                    screen.window.orderFrontRegardless()
+                }
+            }
+        }
+        if !screens.contains(where: { $0.displayID == state.geometry.displayID }), let first = screens.first {
+            state.geometry = first.geometry
+        }
+        markActive()
+    }
+
+    private func markActive() {
+        let id = state.geometry.displayID
+        for screen in screens { screen.isActive = screen.displayID == id }
+    }
+
+    /// Move the panel to the display the user is on. Called every time the notch is asked to open.
+    private func retargetToActiveScreen() {
+        syncScreens()
+        guard let screen = NotchGeometry.activeScreen() else { return }
+        let geometry = NotchGeometry.detect(on: screen)
+        guard geometry != state.geometry else { return }
+        state.geometry = geometry
+        markActive()
+        Trace.log("retarget display=\(geometry.displayID) frame=\(String(describing: geometry.screenFrame))")
+    }
 
     func toggle(section: Section? = nil) {
         if state.isOpen, section == nil || section == state.section { close() } else { open(section: section) }
     }
 
-    /// Mouse fallback (spec S8): a click on the notch tab, the bare notch, or a toast opens the island.
-    private func tabClicked() {
-        Trace.log("tab clicked; open=\(state.isOpen)")
-        if state.isOpen { close() } else { open() }
+    private func tabClicked(on screen: ScreenNotch) {
+        Trace.log("tab clicked; display=\(screen.displayID) open=\(state.isOpen)")
+        if state.isOpen { close() } else { open(on: screen) }
     }
 
-    /// Shows the compact dictation pill (from collapsed, or shrinking down from the island).
     func openDictation() {
-        refreshGeometry()
+        retargetToActiveScreen()
         collapseTask?.cancel()
         toastTask?.cancel()
         state.toast = nil
@@ -94,20 +142,29 @@ final class NotchController {
         applyBaseFrame()
         state.wantsSearchFocus = false
         state.footerHint = nil
-        // Set the final canvas before showing it; resizing after the animation moved the contents sideways.
-        // Dictation is an overlay: the target app keeps its insertion point and ordinary keyboard input.
         panel.acceptsKeyboardFocus = false
         state.panelUsesDictationSize = true
         panel.setFrame(state.metrics.dictationWindowFrame(for: state.geometry), display: false)
-        base.orderOut(nil)
+        activeNotch.window.orderOut(nil)
         panel.orderFrontRegardless()
         withAnimation(Self.openAnimation) { state.phase = .dictation }
         if panel.isKeyWindow { panel.resignKey() }
         Trace.log("openDictation key=\(panel.isKeyWindow)")
     }
 
-    func open(section: Section? = nil) {
-        refreshGeometry()
+    func open(section: Section? = nil) { open(section: section, on: nil) }
+
+    /// `screen` pins the panel to a clicked tab; otherwise it follows the pointer / focused display.
+    func open(on screen: ScreenNotch) { open(section: nil, on: screen) }
+
+    private func open(section: Section?, on screen: ScreenNotch?) {
+        if let screen {
+            syncScreens()
+            state.geometry = screen.geometry
+            markActive()
+        } else {
+            retargetToActiveScreen()
+        }
         collapseTask?.cancel()
         toastTask?.cancel()
         state.toast = nil
@@ -126,16 +183,15 @@ final class NotchController {
         withAnimation(Self.openAnimation) { state.phase = .expanded }
         state.wantsSearchFocus = true
         Log.notch.debug("open \(self.state.section.rawValue)")
-        Trace.log("open \(state.section.rawValue) key=\(panel.isKeyWindow) firstResponder=\(String(describing: panel.firstResponder))")
+        Trace.log("open \(state.section.rawValue) display=\(state.geometry.displayID) key=\(panel.isKeyWindow) firstResponder=\(String(describing: panel.firstResponder))")
     }
 
     func close() {
         guard state.isOpen else { return }
         state.wantsSearchFocus = false
         withAnimation(Self.closeAnimation) { state.phase = .collapsed }
-        // Return the key focus immediately, before any paste or the closing animation completes.
         if panel.isKeyWindow { panel.resignKey() }
-        base.orderFrontRegardless()
+        for screen in screens { screen.window.orderFrontRegardless() }
         collapseTask?.cancel()
         collapseTask = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(280))
@@ -147,7 +203,6 @@ final class NotchController {
         Trace.log("close")
     }
 
-    /// Collapse and flash a confirmation pill under the notch.
     func closeWithToast(_ toast: Toast, duration: Duration = .milliseconds(1400)) {
         close()
         showToast(toast, duration: duration)
@@ -155,7 +210,7 @@ final class NotchController {
 
     func showToast(_ toast: Toast, duration: Duration = .milliseconds(1400)) {
         guard !state.isOpen else { return }
-        base.orderFrontRegardless()
+        activeNotch.window.orderFrontRegardless()
         toastTask?.cancel()
         state.toast = toast
         applyBaseFrame(phase: .toast)
@@ -171,56 +226,46 @@ final class NotchController {
         }
     }
 
-    // MARK: - Geometry
-
     func refreshGeometry() {
-        guard let screen = NotchGeometry.preferredScreen() else { return }
-        let g = NotchGeometry.detect(on: screen)
-        guard g != state.geometry else { return }
-        state.geometry = g
-        base.ignoresMouseEvents = !g.hasPhysicalNotch
-        if state.isExpanded { panel.setFrame(state.metrics.expandedWindowFrame(for: g), display: true) }
-        if state.isDictating { panel.setFrame(state.metrics.dictationWindowFrame(for: g), display: true) }
+        syncScreens()
+        guard let current = screens.first(where: { $0.displayID == state.geometry.displayID }) else { return }
+        if current.geometry != state.geometry {
+            state.geometry = current.geometry
+            if state.isExpanded { panel.setFrame(state.metrics.expandedWindowFrame(for: current.geometry), display: true) }
+            if state.isDictating { panel.setFrame(state.metrics.dictationWindowFrame(for: current.geometry), display: true) }
+        }
         applyBaseFrame(phase: state.basePhase)
     }
 
-    /// Whether the idle base window shows the wider clickable tab (only meaningful on a real notch).
-    var showsTab: Bool { state.showsNotchTab && state.geometry.hasPhysicalNotch }
+    /// The tab is what makes a notch visible on a display that has no physical one.
+    var showsTab: Bool { state.showsNotchTab }
 
     func applyBaseFrame(phase: BasePhase = .idle) {
-        let g = state.geometry
-        let frame: CGRect
-        switch phase {
-        case .idle: frame = state.metrics.collapsedWindowFrame(for: g, tab: showsTab)
-        case .toast:
-            let s = state.metrics.toastSize
-            let w = s.width + state.metrics.topFillet * 2
-            frame = CGRect(x: g.notchCenterX - w / 2, y: g.topY - s.height, width: w, height: s.height)
+        let active = activeNotch
+        for screen in screens {
+            let p = screen === active ? phase : .idle
+            let g = screen.geometry
+            let frame = p == .toast ? state.metrics.toastWindowFrame(for: g)
+                                    : state.metrics.collapsedWindowFrame(for: g, tab: showsTab)
+            screen.canvasSize = frame.size
+            screen.window.setFrame(frame, display: true)
+            screen.window.ignoresMouseEvents = !(showsTab || g.hasPhysicalNotch)
+            let grow = p == .idle && showsTab ? state.metrics.tabHoverGrowth : .zero
+            screen.host?.hitInsets = NSEdgeInsets(top: 0, left: grow.width, bottom: grow.height, right: grow.width)
         }
-        state.baseCanvasSize = frame.size
-        base.setFrame(frame, display: true)
-        base.ignoresMouseEvents = !g.hasPhysicalNotch
-        let grow = phase == .idle && showsTab ? state.metrics.tabHoverGrowth : .zero
-        baseHost?.hitInsets = NSEdgeInsets(top: 0, left: grow.width, bottom: grow.height, right: grow.width)
     }
 
     func panelDidResignKey() {
-        // Dictation must survive app switches and microphone permission prompts.
-        // Only the ordinary expanded tabs dismiss when focus moves elsewhere.
         Trace.log("panel resigned key; expanded=\(state.isExpanded) frontmost=\(NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "-") active=\(NSApp.isActive)")
         if state.isExpanded, !isSnapshotting { close() }
     }
 
-    // MARK: - Automation support
-
-    /// Renders the island (or base) view tree to a PNG via `ImageRenderer` — no Screen Recording permission needed.
-    /// AppKit-backed controls (the text field) render empty; verify typed text through `dump` instead.
     func snapshot(window: WindowKind, to url: URL) throws {
-        let size = (window == .panel ? panel : base).frame.size
+        let size = (window == .panel ? panel.frame.size : activeNotch.window.frame.size)
         let backdrop = Color(red: 0.55, green: 0.60, blue: 0.70)
         let content: AnyView = switch window {
         case .panel: AnyView(NotchRootView(state: state, controller: self, content: contentProvider, dictation: dictationProvider))
-        case .base: AnyView(NotchBaseView(state: state, controller: self))
+        case .base: AnyView(NotchBaseView(screen: activeNotch, state: state, controller: self))
         }
         let renderer = ImageRenderer(content: content.frame(width: size.width, height: size.height).background(backdrop)
             .environment(\.snapshotMode, true))
@@ -239,7 +284,6 @@ final class NotchController {
     enum WindowKind: String { case panel, base }
 }
 
-/// Buttons in the passive dictation overlay work on the first click without taking input focus.
 final class NotchHostingView<Content: View>: NSHostingView<Content> {
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 }

@@ -27,8 +27,8 @@ import SwiftUI
     @Test func baseHostingUsesTheExplicitWindowCanvasAndToastsDoNotCoverDictation() {
         let controller = NotchController()
         controller.applyBaseFrame()
-        let host = NSHostingView(rootView: NotchBaseView(state: controller.state, controller: controller))
-        #expect(host.fittingSize == controller.base.frame.size)
+        let host = NSHostingView(rootView: NotchBaseView(screen: controller.activeNotch, state: controller.state, controller: controller))
+        #expect(host.fittingSize == controller.activeNotch.window.frame.size)
         controller.state.phase = .dictation
         controller.showToast(Toast(symbol: "checkmark", title: "Previous action"))
         #expect(controller.state.basePhase == .idle)
