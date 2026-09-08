@@ -86,6 +86,25 @@ enum Automation {
             // Restrict synthetic delivery checks to a named local test app even if focus changes.
             guard let text = params["text"], let target = params["target"] else { return }
             app.coordinator.context.deliverDictation(text, insert: true, expectedBundleID: target)
+        case "windows":
+            guard let path = params["path"] else { return }
+            let windows = WindowIndex.windows().map {
+                ["app": $0.appName, "title": $0.displayTitle, "slot": $0.slot, "minimized": $0.isMinimized, "id": $0.id]
+            }
+            if let data = try? JSONSerialization.data(withJSONObject: windows, options: [.prettyPrinted]) {
+                try? data.write(to: URL(fileURLWithPath: path))
+            }
+        case "windows-debug":
+            guard let path = params["path"] else { return }
+            if let data = try? JSONSerialization.data(withJSONObject: WindowIndex.diagnostics(), options: [.prettyPrinted]) {
+                try? data.write(to: URL(fileURLWithPath: path))
+            }
+        case "raise":
+            guard let id = params["id"], let entry = WindowIndex.windows().first(where: { $0.id == id }) else {
+                Log.app.error("raise: no window with id \(params["id"] ?? "")")
+                return
+            }
+            WindowIndex.raise(entry)
         case "keep-awake":
             guard app.settings.isEnabled(.keepAwake) else { return }
             app.coordinator.keepAwake.setEnabled(params["enabled"] == "1")

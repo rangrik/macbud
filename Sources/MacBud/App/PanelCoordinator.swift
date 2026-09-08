@@ -364,6 +364,7 @@ final class PanelCoordinator {
             "installedInApplications": AppDelegate.isInstalledInApplications,
             "bundlePath": Bundle.main.bundleURL.path,
             "showsTab": notch.showsTab,
+            "frontmostApp": NSWorkspace.shared.frontmostApplication?.localizedName ?? "",
             "tabPlan": {
                 let sections = settings.enabledSections
                 let side = (state.metrics.islandSize.width - state.geometry.notchRect.width) / 2
