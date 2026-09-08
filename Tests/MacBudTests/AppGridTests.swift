@@ -73,21 +73,31 @@ import Foundation
         #expect(store.score(for: "fresh") > store.score(for: "stale"))
     }
 
-    @Test func rankingSkipsOpenAppsAndUnusedOnes() {
+    @Test func recentListSkipsOpenAppsAndOnesNeverVisited() {
         let store = makeStore()
         store.record("chrome")
         store.record("mail")
-        let ranked = store.ranked([entry("chrome"), entry("mail"), entry("neverOpened")],
-                                  excluding: ["chrome"], limit: 10)
-        #expect(ranked.map(\.bundleID) == ["mail"])
+        let recent = store.mostRecent([entry("chrome"), entry("mail"), entry("neverOpened")],
+                                      excluding: ["chrome"], limit: 10)
+        #expect(recent.map(\.bundleID) == ["mail"])
     }
 
-    @Test func rankingHonoursTheLimitAndStampsLastUsed() {
+    @Test func recentListIsLastVisitedFirstAndIgnoresHowOften() {
+        let store = makeStore()
+        // "workhorse" is used all day but you were in "quick" a minute ago. Recency wins outright.
+        store.seed("workhorse", uses: 200, lastUsed: .now.addingTimeInterval(-3_600))
+        store.seed("quick", uses: 1, lastUsed: .now.addingTimeInterval(-60))
+        let recent = store.mostRecent([entry("workhorse"), entry("quick")], excluding: [], limit: 10)
+        #expect(recent.map(\.bundleID) == ["quick", "workhorse"])
+        #expect(store.score(for: "workhorse") > store.score(for: "quick"), "search ranking still values frequency")
+    }
+
+    @Test func recentListHonoursTheLimitAndStampsLastUsed() {
         let store = makeStore()
         for id in ["a", "b", "c"] { store.record(id) }
-        let ranked = store.ranked([entry("a"), entry("b"), entry("c")], excluding: [], limit: 2)
-        #expect(ranked.count == 2)
-        #expect(ranked.allSatisfy { $0.lastUsed != nil })
+        let recent = store.mostRecent([entry("a"), entry("b"), entry("c")], excluding: [], limit: 2)
+        #expect(recent.count == 2)
+        #expect(recent.allSatisfy { $0.lastUsed != nil })
     }
 }
 

@@ -25,8 +25,8 @@ final class AppsSectionController {
         guard query.isEmpty else {
             return AppGrid(groups: [.init(title: "Results", items: searchResults)], columns: Self.columns)
         }
-        let open = Array(index.running.prefix(Self.openLimit))
-        let recent = usage.ranked(index.installed, excluding: Set(open.map(\.bundleID)), limit: Self.recentLimit)
+        let open = Array(byLastVisit(index.running).prefix(Self.openLimit))
+        let recent = usage.mostRecent(index.installed, excluding: Set(open.map(\.bundleID)), limit: Self.recentLimit)
         return AppGrid(groups: [.init(title: "Open now", items: open), .init(title: "Recent", items: recent)],
                        columns: Self.columns)
     }
@@ -49,6 +49,26 @@ final class AppsSectionController {
             .sorted { $0.score > $1.score }
             .prefix(40)
             .map(\.entry)
+    }
+
+    /// Window stacking is a decent guess at "last visited", but an app whose windows are all
+    /// minimised or parked on another Space falls out of it and lands in launch order instead.
+    /// A recorded visit beats the guess wherever we have one.
+    private func byLastVisit(_ entries: [AppEntry]) -> [AppEntry] {
+        entries.enumerated()
+            .sorted { left, right in
+                switch (usage.lastUsed(for: left.element.bundleID), usage.lastUsed(for: right.element.bundleID)) {
+                case let (l?, r?): l == r ? left.offset < right.offset : l > r
+                case (_?, nil): true
+                case (nil, _?): false
+                case (nil, nil): left.offset < right.offset
+                }
+            }
+            .map { _, entry in
+                var stamped = entry
+                stamped.lastUsed = usage.lastUsed(for: entry.bundleID)
+                return stamped
+            }
     }
 
     var selected: AppEntry? {

@@ -70,16 +70,18 @@ final class AppUsageStore {
         }
     }
 
-    /// Best-scoring apps first, skipping anything already shown elsewhere.
-    func ranked(_ candidates: [AppEntry], excluding excluded: Set<String>, limit: Int) -> [AppEntry] {
+    /// Last visited first, skipping anything already shown elsewhere. The group is called "Recent",
+    /// so how often you use an app gets no vote here — frequency still counts in search, where the
+    /// best match genuinely benefits from knowing what you reach for.
+    func mostRecent(_ candidates: [AppEntry], excluding excluded: Set<String>, limit: Int) -> [AppEntry] {
         candidates
-            .filter { !excluded.contains($0.bundleID) && entries[$0.bundleID] != nil }
-            .map { entry in
+            .compactMap { entry -> AppEntry? in
+                guard !excluded.contains(entry.bundleID), let visited = lastUsed(for: entry.bundleID) else { return nil }
                 var stamped = entry
-                stamped.lastUsed = lastUsed(for: entry.bundleID)
+                stamped.lastUsed = visited
                 return stamped
             }
-            .sorted { score(for: $0.bundleID) > score(for: $1.bundleID) }
+            .sorted { ($0.lastUsed ?? .distantPast) > ($1.lastUsed ?? .distantPast) }
             .prefix(limit)
             .map { $0 }
     }
