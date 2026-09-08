@@ -3,6 +3,7 @@ import SwiftUI
 
 struct DictationSettings: View {
     @Bindable var settings: AppSettings
+    var words: DictationWordStore?
     @State private var supported: [Locale] = []
     @State private var installed: Set<String> = []
     @State private var status: String = "Checking…"
@@ -28,11 +29,29 @@ struct DictationSettings: View {
                 Text("Recognition runs entirely on this Mac. The model for a language is downloaded once.")
                     .font(.caption).foregroundStyle(.secondary)
             }
+            if let words, !words.rules.isEmpty {
+                SwiftUI.Section("Words you have taught it") {
+                    ForEach(words.rules) { rule in
+                        LabeledContent {
+                            HStack {
+                                Text(rule.isActive ? "Correcting" : "Learning")
+                                    .font(.caption).foregroundStyle(.secondary)
+                                Button("Forget") { words.remove(rule.id) }
+                            }
+                        } label: {
+                            Text("\(rule.heard) → \(rule.meant)")
+                        }
+                    }
+                    Text("Filled in when you fix a word while dictating. \"Learning\" only nudges the recogniser; a word becomes \"Correcting\" once you fix it twice, and is then also replaced in finished text.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
             SwiftUI.Section("How it works") {
                 LabeledContent("Start") { Text(settings.dictationHotKey?.displayString ?? "No shortcut set — add one in Shortcuts") }
                 LabeledContent("Hold to talk") { Text(settings.holdToTalkHotKey?.displayString ?? "Set in Shortcuts") }
                 LabeledContent("Stop and insert") { Text("Press the dictation shortcut again, or release Hold to talk") }
-                Text("Escape cancels. You can also click Insert or Copy. Text goes into the currently focused input; otherwise it is copied. Return and Command-Return stay with your active app. Completed dictations are saved in History, where you can save them as snippets.")
+                LabeledContent("Fix a word") { Text("Pause, then click any word in the transcript") }
+                Text("Words it was unsure of are underlined. Clicking one pauses the microphone, offers what it nearly heard instead, and lets you type your own — then you carry on talking. Escape leaves the word alone; press it again to cancel the recording. You can also click Insert or Copy. Text goes into the currently focused input; otherwise it is copied. Return and Command-Return stay with your active app. Completed dictations are saved in History, where you can save them as snippets.")
                     .font(.caption).foregroundStyle(.secondary)
                 Text("If recognition fails, Retry transcribes the same recording. Audio stays in a temporary file on this Mac until you finish or discard it.")
                     .font(.caption).foregroundStyle(.secondary)

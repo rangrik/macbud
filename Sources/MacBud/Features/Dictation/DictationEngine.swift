@@ -23,25 +23,33 @@ import Speech
     }
 
     private final class Attempt {
+        let id = UUID()
         let transcriber: DictationTranscriber
         let analyzer: SpeechAnalyzer
         var collector: Task<Void, Error>?
-        var finalSegments: [String] = []
-        var volatileSegment = ""
+        var settled: [DictationSegment] = []
+        var draft: DictationSegment?
         var failure: Error?
         var valid = true
 
         init(locale: Locale) {
-            transcriber = DictationTranscriber(locale: locale, preset: .progressiveLongDictation)
+            transcriber = DictationTranscriber(locale: locale, preset: DictationEngine.preset)
             analyzer = SpeechAnalyzer(modules: [transcriber])
         }
 
-        var text: String {
-            (finalSegments + [volatileSegment])
-                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-                .filter { !$0.isEmpty }.joined(separator: " ")
+        var transcript: DictationTranscript {
+            DictationTranscript(attemptID: id, settled: settled, draft: draft)
         }
     }
+
+    /// Apple's long-dictation preset plus the three things the notch needs: words settling after a
+    /// pause instead of at the end, how sure the recogniser was, and what it nearly picked instead.
+    static let preset: DictationTranscriber.Preset = {
+        var preset = DictationTranscriber.Preset.progressiveLongDictation
+        preset.reportingOptions.formUnion([.volatileResults, .frequentFinalization, .alternativeTranscriptions])
+        preset.attributeOptions.formUnion([.transcriptionConfidence, .audioTimeRange])
+        return preset
+    }()
 
     private let audioEngine = AVAudioEngine()
     private var attempt: Attempt?
@@ -58,11 +66,14 @@ import Speech
         self.recordingDirectory = recordingDirectory
     }
 
-    var onTranscript: (@MainActor @Sendable (String) -> Void)?
+    var onTranscript: (@MainActor @Sendable (DictationTranscript) -> Void)?
     var onVolume: (@MainActor @Sendable (Float) -> Void)?
     var onError: (@MainActor @Sendable (Error) -> Void)?
 
     private(set) var isRunning = false
+    /// Words to bias the recogniser towards. Read when an attempt starts.
+    var vocabulary: [String] = []
+    private(set) var isCapturePaused = false
     var canRetry: Bool { recording?.hasAudio == true && recordingLocale != nil }
 
     // MARK: Locales & assets
@@ -129,6 +140,7 @@ import Speech
             audioCapture = capture
             let (stream, continuation) = AsyncStream<AnalyzerInput>.makeStream()
             inputContinuation = continuation
+            try await applyVocabulary(to: attempt)
             collectResults(for: attempt)
             do {
                 try await DictationDeadline.run(timeout: .seconds(30)) {
@@ -173,22 +185,23 @@ import Speech
     }
 
     /// Stop the microphone and seal its file before waiting for the final words.
-    func stop() async throws -> String {
+    func stop() async throws -> DictationTranscript {
         guard isRunning, let attempt else { throw EngineError.notRunning }
         let captureError = stopCapture(drainConverter: true)
         do {
             if let captureError { throw captureError }
             if recording?.hasAudibleAudio != true {
                 try checkCurrent(attempt)
+                let empty = DictationTranscript(attemptID: attempt.id)
                 endAttempt(attempt, cancelAnalyzer: true)
-                onTranscript?("")
-                return ""
+                onTranscript?(empty)
+                return empty
             }
             try await finish(attempt, duration: recording?.duration ?? 0)
             try checkCurrent(attempt)
-            let text = attempt.text
+            let transcript = attempt.transcript
             endAttempt(attempt, cancelAnalyzer: false)
-            return text
+            return transcript
         } catch {
             endAttempt(attempt, cancelAnalyzer: true)
             throw error
@@ -196,7 +209,7 @@ import Speech
     }
 
     /// Replay the sealed recording, without accessing the microphone again.
-    func retry() async throws -> String {
+    func retry() async throws -> DictationTranscript {
         await suspend()
         try Task.checkCancellation()
         guard let recording, let locale = recordingLocale, recording.hasAudio else { throw EngineError.noRecording }
@@ -226,7 +239,7 @@ import Speech
 
     /// Imports and retains a private copy, so file-transcription failures can also retry.
     /// The caller's source file is never changed or removed.
-    func transcribe(file url: URL, locale: Locale) async throws -> String {
+    func transcribe(file url: URL, locale: Locale) async throws -> DictationTranscript {
         await suspend()
         try Task.checkCancellation()
         discardRecording()
@@ -259,6 +272,51 @@ import Speech
 
     // MARK: Recognition lifecycle
 
+    /// Pauses the microphone while you correct a word, so keystrokes and muttering never reach
+    /// the recogniser or the saved recording.
+    func setCapturePaused(_ paused: Bool) {
+        guard isRunning, isCapturePaused != paused else { return }
+        isCapturePaused = paused
+        audioCapture?.setPaused(paused)
+    }
+
+    private func applyVocabulary(to attempt: Attempt) async throws {
+        guard !vocabulary.isEmpty else { return }
+        let context = AnalysisContext()
+        context.contextualStrings[.general] = vocabulary
+        try await attempt.analyzer.setContext(context)
+    }
+
+    /// Words with the recogniser's own confidence and runners-up attached. A styling run can start
+    /// or end mid-word, so a word keeps the lowest confidence of every run it spans.
+    private static func segment(from result: DictationTranscriber.Result) -> DictationSegment {
+        var texts: [String] = []
+        var confidences: [Double?] = []
+        var current = ""
+        var currentConfidence: Double?
+        func flush() {
+            guard !current.isEmpty else { return }
+            texts.append(current)
+            confidences.append(currentConfidence)
+            current = ""
+            currentConfidence = nil
+        }
+        for run in result.text.runs {
+            let confidence = run[AttributeScopes.SpeechAttributes.ConfidenceAttribute.self]
+            for character in result.text[run.range].characters {
+                guard !character.isWhitespace else { flush(); continue }
+                current.append(character)
+                if let confidence { currentConfidence = min(currentConfidence ?? confidence, confidence) }
+            }
+        }
+        flush()
+        let runnersUp = result.alternatives.map { DictationSegment.split(String($0.characters)) }
+        let alternatives = DictationTranscript.alignedAlternatives(chosen: texts, runnersUp: runnersUp)
+        return DictationSegment(words: texts.indices.map {
+            DictationWord(text: texts[$0], confidence: confidences[$0], alternatives: alternatives[$0])
+        })
+    }
+
     private func beginAttempt(locale: Locale) -> Attempt {
         let attempt = Attempt(locale: locale)
         self.attempt = attempt
@@ -272,14 +330,14 @@ import Speech
                 for try await result in attempt.transcriber.results {
                     guard let self else { throw CancellationError() }
                     try self.checkCurrent(attempt)
-                    let text = String(result.text.characters)
+                    let segment = DictationEngine.segment(from: result)
                     if result.isFinal {
-                        attempt.finalSegments.append(text)
-                        attempt.volatileSegment = ""
+                        if !segment.isEmpty { attempt.settled.append(segment) }
+                        attempt.draft = nil
                     } else {
-                        attempt.volatileSegment = text
+                        attempt.draft = segment.isEmpty ? nil : segment
                     }
-                    self.onTranscript?(attempt.text)
+                    self.onTranscript?(attempt.transcript)
                 }
             } catch {
                 if let self, self.attempt === attempt, attempt.valid, !Task.isCancelled {
@@ -291,17 +349,19 @@ import Speech
         }
     }
 
-    private func recognizeFile(_ url: URL, locale: Locale, duration: TimeInterval) async throws -> String {
+    private func recognizeFile(_ url: URL, locale: Locale, duration: TimeInterval) async throws -> DictationTranscript {
         try Task.checkCancellation()
         // The retained copy measured every sample while writing. Avoid starting
         // speech services for silence, which must never become invented words.
         guard recording?.hasAudibleAudio == true else {
-            onTranscript?("")
-            return ""
+            let empty = DictationTranscript()
+            onTranscript?(empty)
+            return empty
         }
         let attempt = beginAttempt(locale: locale)
         do {
             let file = try AVAudioFile(forReading: url)
+            try await applyVocabulary(to: attempt)
             collectResults(for: attempt)
             // Bound file startup as well as finalization: both can wait on model services.
             try await DictationDeadline.run(timeout: finalizationBudget(duration: duration)) {
@@ -310,9 +370,9 @@ import Speech
                 try await attempt.collector?.value
             }
             try checkCurrent(attempt)
-            let text = attempt.text
+            let transcript = attempt.transcript
             endAttempt(attempt, cancelAnalyzer: false)
-            return text
+            return transcript
         } catch {
             endAttempt(attempt, cancelAnalyzer: true)
             throw error
@@ -346,6 +406,7 @@ import Speech
     @discardableResult
     private func stopCapture(drainConverter: Bool = false) -> Error? {
         isRunning = false
+        isCapturePaused = false
         if let configurationObserver {
             NotificationCenter.default.removeObserver(configurationObserver)
             self.configurationObserver = nil

@@ -105,6 +105,7 @@ nonisolated final class DictationAudioCapture: @unchecked Sendable {
     private let recording: DictationRecording
     private let ratio: Double
     private var finished = false
+    private var paused = false
 
     init(inputFormat: AVAudioFormat, targetFormat: AVAudioFormat, recording: DictationRecording) throws {
         guard let converter = AVAudioConverter(from: inputFormat, to: targetFormat) else {
@@ -116,9 +117,15 @@ nonisolated final class DictationAudioCapture: @unchecked Sendable {
         ratio = targetFormat.sampleRate / inputFormat.sampleRate
     }
 
+    /// Dropped audio is never recorded and never analyzed, so typing a correction
+    /// leaves no trace in either.
+    func setPaused(_ paused: Bool) {
+        lock.withLock { self.paused = paused }
+    }
+
     func process(_ buffer: AVAudioPCMBuffer) throws -> Output? {
         try lock.withLock {
-            guard !finished else { return nil }
+            guard !finished, !paused else { return nil }
             // Save the source first: even a conversion failure leaves replayable audio.
             guard try recording.append(buffer) else { return nil }
             let capacity = AVAudioFrameCount(ceil(Double(buffer.frameLength) * ratio)) + 32
