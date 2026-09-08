@@ -1,4 +1,5 @@
 import AppKit
+import CoreServices
 
 /// Every app you could launch, plus who is running right now and in what order you last used them.
 /// The installed scan is slow and rare; the running list is cheap and re-read every time the notch opens.
@@ -30,11 +31,14 @@ final class AppIndex {
         }
     }
 
+    /// Usage is re-read here rather than reused from the installed scan: that scan is minutes old,
+    /// and "which app was I just in" has to be right to the second.
     func refreshRunning() {
         running = Self.runningInFrontToBackOrder().compactMap { app in
             guard let bundleID = app.bundleIdentifier, let url = app.bundleURL else { return nil }
+            let usage = Self.usage(for: url)
             return AppEntry(bundleID: bundleID, name: app.localizedName ?? url.deletingPathExtension().lastPathComponent,
-                            url: url, isRunning: true)
+                            url: url, isRunning: true, lastUsed: usage.lastUsed, useCount: usage.useCount)
         }
     }
 
@@ -97,7 +101,19 @@ final class AppIndex {
         if flag(info["LSBackgroundOnly"]) { return nil }
         let name = (info["CFBundleDisplayName"] as? String) ?? (info["CFBundleName"] as? String)
             ?? url.deletingPathExtension().lastPathComponent
-        return AppEntry(bundleID: bundleID, name: name, url: url)
+        let usage = usage(for: url)
+        return AppEntry(bundleID: bundleID, name: name, url: url, lastUsed: usage.lastUsed, useCount: usage.useCount)
+    }
+
+    /// When you last used an app and how often, straight from LaunchServices via Spotlight. It has
+    /// been recording this since long before MacBud existed and it updates on every app switch, not
+    /// just on launch — so it is both more complete and more accurate than anything we could watch
+    /// ourselves. Nil date when Spotlight indexing is off, or for an app never opened.
+    /// `kMDItemUseCount` has no bridged Swift constant, hence the string key.
+    nonisolated static func usage(for url: URL) -> (lastUsed: Date?, useCount: Int) {
+        guard let item = MDItemCreate(nil, url.path as CFString) else { return (nil, 0) }
+        return (MDItemCopyAttribute(item, kMDItemLastUsedDate) as? Date,
+                (MDItemCopyAttribute(item, "kMDItemUseCount" as CFString) as? NSNumber)?.intValue ?? 0)
     }
 
     /// Info.plist booleans are written as both `<true/>` and the string "1".

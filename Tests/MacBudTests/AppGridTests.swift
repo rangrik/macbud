@@ -55,49 +55,51 @@ import Foundation
     }
 }
 
-@Suite @MainActor struct AppUsageStoreTests {
-    /// A throwaway directory so the debounced save never touches the real Application Support copy.
-    private func makeStore() -> AppUsageStore {
-        AppUsageStore(dataStore: DataStore(directory: URL(fileURLWithPath: NSTemporaryDirectory())
-            .appendingPathComponent("macbud-tests-\(UUID().uuidString)", isDirectory: true)))
+/// Ordering is the seam: macOS gives us the dates, we decide what they mean.
+@Suite struct AppOrderingTests {
+    private func entry(_ name: String, minutesAgo: Int? = nil, useCount: Int = 0) -> AppEntry {
+        AppEntry(bundleID: name, name: name, url: URL(fileURLWithPath: "/Applications/\(name).app"),
+                 lastUsed: minutesAgo.map { Date.now.addingTimeInterval(-Double($0) * 60) }, useCount: useCount)
     }
 
-    private func entry(_ name: String) -> AppEntry {
-        AppEntry(bundleID: name, name: name, url: URL(fileURLWithPath: "/Applications/\(name).app"))
+    @Test func openAppsSortByLastVisit() {
+        // Window stacking says [stale, fresh]; the recorded visits say otherwise and win.
+        let sorted = AppsSectionController.byLastVisit([entry("stale", minutesAgo: 90), entry("fresh", minutesAgo: 2)])
+        #expect(sorted.map(\.bundleID) == ["fresh", "stale"])
     }
 
-    @Test func recentUseBeatsRawCount() {
-        let store = makeStore()
-        store.seed("stale", uses: 20, lastUsed: .now.addingTimeInterval(-60 * 86_400))
-        store.seed("fresh", uses: 2, lastUsed: .now)
-        #expect(store.score(for: "fresh") > store.score(for: "stale"))
+    @Test func appsWithNoRecordKeepWindowStackingOrderBehindTheRest() {
+        let sorted = AppsSectionController.byLastVisit([entry("neverA"), entry("neverB"), entry("visited", minutesAgo: 30)])
+        #expect(sorted.map(\.bundleID) == ["visited", "neverA", "neverB"])
     }
 
-    @Test func recentListSkipsOpenAppsAndOnesNeverVisited() {
-        let store = makeStore()
-        store.record("chrome")
-        store.record("mail")
-        let recent = store.mostRecent([entry("chrome"), entry("mail"), entry("neverOpened")],
-                                      excluding: ["chrome"], limit: 10)
+    @Test func recentSkipsOpenAppsAndOnesNeverUsed() {
+        let installed = [entry("open", minutesAgo: 1), entry("mail", minutesAgo: 20), entry("neverOpened")]
+        let recent = AppsSectionController.recentApps(installed, excluding: ["open"], limit: 10)
         #expect(recent.map(\.bundleID) == ["mail"])
     }
 
-    @Test func recentListIsLastVisitedFirstAndIgnoresHowOften() {
-        let store = makeStore()
-        // "workhorse" is used all day but you were in "quick" a minute ago. Recency wins outright.
-        store.seed("workhorse", uses: 200, lastUsed: .now.addingTimeInterval(-3_600))
-        store.seed("quick", uses: 1, lastUsed: .now.addingTimeInterval(-60))
-        let recent = store.mostRecent([entry("workhorse"), entry("quick")], excluding: [], limit: 10)
+    @Test func recentIsPurelyRecencyAndIgnoresHowOften() {
+        // You launch the workhorse constantly but were in the other one a minute ago.
+        let installed = [entry("workhorse", minutesAgo: 60, useCount: 9_000), entry("quick", minutesAgo: 1, useCount: 2)]
+        let recent = AppsSectionController.recentApps(installed, excluding: [], limit: 10)
         #expect(recent.map(\.bundleID) == ["quick", "workhorse"])
-        #expect(store.score(for: "workhorse") > store.score(for: "quick"), "search ranking still values frequency")
     }
 
-    @Test func recentListHonoursTheLimitAndStampsLastUsed() {
-        let store = makeStore()
-        for id in ["a", "b", "c"] { store.record(id) }
-        let recent = store.mostRecent([entry("a"), entry("b"), entry("c")], excluding: [], limit: 2)
-        #expect(recent.count == 2)
-        #expect(recent.allSatisfy { $0.lastUsed != nil })
+    @Test func recentHonoursTheLimit() {
+        let installed = (0..<20).map { entry("app\($0)", minutesAgo: $0 + 1) }
+        #expect(AppsSectionController.recentApps(installed, excluding: [], limit: 10).count == 10)
+    }
+
+    @Test func searchBonusFavoursRunningAppsAndFlattensHugeUseCounts() {
+        let chrome = AppsSectionController.rankingBonus(isRunning: false, useCount: 35_000)
+        let modest = AppsSectionController.rankingBonus(isRunning: false, useCount: 120)
+        let unused = AppsSectionController.rankingBonus(isRunning: false, useCount: 0)
+        #expect(unused == 0)
+        #expect(modest > unused)
+        #expect(chrome > modest)
+        #expect(chrome - modest < modest, "a 300x use count must not become a 300x score")
+        #expect(AppsSectionController.rankingBonus(isRunning: true, useCount: 0) > chrome)
     }
 }
 

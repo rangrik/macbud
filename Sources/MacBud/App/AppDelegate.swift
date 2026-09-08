@@ -41,17 +41,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             await clipboardStore.load()
             await snippetStore.load()
             await coordinator.dictationHistoryStore.load()
-            await coordinator.appUsage.load()
             if settings.isEnabled(.dictationHistory), !settings.hasMigratedDictationHistory {
                 coordinator.dictationHistoryStore.importLegacy(clipboardStore.items, sourceBundleID: Bundle.main.bundleIdentifier ?? "com.rangrik.macbud")
                 await coordinator.dictationHistoryStore.flush()
                 settings.hasMigratedDictationHistory = true
             }
         }
-        if settings.isEnabled(.apps) {
-            coordinator.appUsage.startObserving()
-            coordinator.appIndex.refresh(force: true)
-        }
+        if settings.isEnabled(.apps) { coordinator.appIndex.refresh(force: true) }
         monitor = ClipboardMonitor(store: clipboardStore, settings: settings)
         if settings.isEnabled(.clipboard) { monitor.start() }
 
@@ -78,7 +74,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 
     func applicationWillTerminate(_ notification: Notification) {
-        if let usage = coordinator?.appUsage { Task { await usage.flush() } }
         coordinator?.keepAwake.stop()
         coordinator?.dictation.cancel()
         HotKeyCenter.shared.unregisterAll()
@@ -113,7 +108,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 guard let self else { return }
                 applyLibrarySettings()
                 if settings.isEnabled(.clipboard) { monitor.start() } else { monitor.stop() }
-                if settings.isEnabled(.apps) { coordinator.appUsage.startObserving(); coordinator.appIndex.refresh() }
+                if settings.isEnabled(.apps) { coordinator.appIndex.refresh() }
                 coordinator.applyFeatureSettings()
                 clipboardStore.limit = settings.historyLimit
                 coordinator.dictationHistoryStore.limit = settings.historyLimit

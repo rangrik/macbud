@@ -18,7 +18,6 @@ final class PanelCoordinator {
     let dictationHistoryStore: DictationHistoryStore
     let dictationHistory: DictationHistorySectionController
     let appIndex: AppIndex
-    let appUsage: AppUsageStore
     let apps: AppsSectionController
     private(set) var isHoldingToTalk = false
     private(set) var dictationSessionHotKey: HotKey?
@@ -30,7 +29,7 @@ final class PanelCoordinator {
 
     init(state: NotchState, notch: NotchController, settings: AppSettings,
          clipboardStore: ClipboardStore, snippetStore: SnippetStore, library: ScreenshotLibrary,
-         appIndex: AppIndex = AppIndex(), appUsage: AppUsageStore = AppUsageStore()) {
+         appIndex: AppIndex = AppIndex()) {
         self.state = state
         self.notch = notch
         self.settings = settings
@@ -38,7 +37,6 @@ final class PanelCoordinator {
         self.snippetStore = snippetStore
         self.library = library
         self.appIndex = appIndex
-        self.appUsage = appUsage
         context = ActionContext(state: state, notch: notch, settings: settings, frontmost: frontmost)
         clipboard = ClipboardSectionController(store: clipboardStore, context: context)
         snippets = SnippetsSectionController(store: snippetStore, clipboard: clipboardStore, context: context)
@@ -46,7 +44,7 @@ final class PanelCoordinator {
         dictationHistoryStore = DictationHistoryStore(dataStore: snippetStore.dataStore)
         dictationHistory = DictationHistorySectionController(store: dictationHistoryStore, context: context, snippets: snippets)
         dictation = DictationController(settings: settings, context: context, clipboard: clipboardStore, history: dictationHistoryStore)
-        apps = AppsSectionController(index: appIndex, usage: appUsage, context: context)
+        apps = AppsSectionController(index: appIndex, context: context)
         clipboard.snippets = snippets
         dictation.onDidEnd = { [weak self] in self?.notch.close() }
         dictation.onActivityChanged = { [weak self] active in

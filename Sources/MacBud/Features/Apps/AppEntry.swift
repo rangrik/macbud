@@ -6,7 +6,9 @@ nonisolated struct AppEntry: Identifiable, Hashable, Sendable {
     let name: String
     let url: URL
     var isRunning = false
+    /// When you last used the app and how many times, as macOS itself records it.
     var lastUsed: Date?
+    var useCount = 0
 
     var id: String { bundleID }
 }
