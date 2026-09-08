@@ -1,6 +1,8 @@
 import Foundation
 
-/// One launchable app. Keyed by bundle id so the running copy and the installed copy are one row.
+/// One thing you can land on: an app to launch, or a specific open window to jump to. Keyed by
+/// bundle id for apps so the running copy and the installed copy are one tile. Deliberately plain
+/// data — the accessibility handle a window needs stays with the controller that raises it.
 nonisolated struct AppEntry: Identifiable, Hashable, Sendable {
     let bundleID: String
     let name: String
@@ -9,8 +11,19 @@ nonisolated struct AppEntry: Identifiable, Hashable, Sendable {
     /// When you last used the app and how many times, as macOS itself records it.
     var lastUsed: Date?
     var useCount = 0
+    /// Set when this tile is one window rather than the whole app.
+    var windowID: String?
+    /// Shown instead of the app name — the window title, but only when its app has more than one
+    /// window open, so a single-window app reads exactly as it did before windows appeared here.
+    var label: String?
 
-    var id: String { bundleID }
+    var id: String { windowID ?? bundleID }
+    var displayName: String { label ?? name }
+    /// Both the app name and the window title match, so "chrome" and "inbox" each find the window.
+    var searchText: String { label.map { "\(name) \($0)" } ?? name }
+
+    static func == (lhs: AppEntry, rhs: AppEntry) -> Bool { lhs.id == rhs.id }
+    func hash(into hasher: inout Hasher) { hasher.combine(id) }
 }
 
 /// Two labelled groups drawn as one grid. Selection is a flat index; `rows` is what makes ↑/↓

@@ -334,7 +334,9 @@ final class PanelCoordinator {
         case .dictationHistory:
             hints = [hint(copy, "Copy", systemImage: "doc.on.doc"), hint(paste, "Insert"), hint(.saveAsSnippet, "Save as snippet"), hint(.delete, "Delete")]
         case .apps:
-            hints = [hint(.primaryAction, apps.selected?.isRunning == true ? "Switch to app" : "Open app", systemImage: "arrow.up.forward.app"),
+            let target = apps.selected
+            let verb = target?.windowID != nil ? "Switch to window" : target?.isRunning == true ? "Switch to app" : "Open app"
+            hints = [hint(.primaryAction, verb, systemImage: "arrow.up.forward.app"),
                      Hint(keys: "↑↓←→", label: "Move", command: nil)]
         }
         if !snippets.isEditing { hints.append(hint(.nextSection, "Section")) }
@@ -408,9 +410,11 @@ final class PanelCoordinator {
         case .apps:
             let grid = apps.grid
             d["selectedIndex"] = apps.selectedIndex
-            d["results"] = grid.items.prefix(30).map(\.name)
-            d["selected"] = apps.selected?.name ?? ""
-            d["appGroups"] = grid.groups.map { ["title": $0.title, "items": $0.items.map(\.name)] }
+            d["results"] = grid.items.prefix(30).map(\.displayName)
+            d["selected"] = apps.selected?.displayName ?? ""
+            d["selectedWindow"] = apps.selected?.windowID ?? ""
+            d["appGroups"] = grid.groups.map { ["title": $0.title, "items": $0.items.map(\.displayName)] }
+            d["openWindows"] = apps.windows.map { ["app": $0.appName, "title": $0.shortTitle, "id": $0.id, "focused": $0.isFocused] }
             d["installedApps"] = appIndex.installed.count
         }
         return d

@@ -18,6 +18,17 @@ struct WindowEntry: Identifiable, Equatable {
     /// Falls back to the app name so a titleless window is still nameable in the list.
     var displayTitle: String { title.isEmpty ? appName : title }
 
+    /// Most apps end their window title with their own name — "New Tab - Google Chrome". Beside the
+    /// app's icon that half is noise, and dropping it buys back room the real title needs.
+    var shortTitle: String {
+        guard !title.isEmpty else { return appName }
+        for separator in [" - ", " — ", " – ", " | "] where title.hasSuffix(separator + appName) {
+            let trimmed = String(title.dropLast(separator.count + appName.count))
+            if !trimmed.isEmpty { return trimmed }
+        }
+        return title
+    }
+
     static func == (lhs: WindowEntry, rhs: WindowEntry) -> Bool { CFEqual(lhs.element, rhs.element) }
 }
 

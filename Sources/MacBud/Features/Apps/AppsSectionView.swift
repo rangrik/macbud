@@ -93,9 +93,11 @@ struct AppTile: View {
             Image(nsImage: AppIconCache.icon(for: entry.url))
                 .resizable().interpolation(.high)
                 .frame(width: 40, height: 40)
-            HighlightedText(text: entry.name, query: query, font: .system(size: 11), color: Theme.textSecondary)
-                .lineLimit(1)
+            HighlightedText(text: entry.displayName, query: query, font: .system(size: 11), color: Theme.textSecondary)
+                .lineLimit(2)
+                .multilineTextAlignment(.center)
                 .truncationMode(.tail)
+                .frame(height: 28, alignment: .top)
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 9)
@@ -106,7 +108,7 @@ struct AppTile: View {
         )
         .contentShape(Rectangle())
         .onHover { hovering = $0 }
-        .help(entry.name)
+        .help(entry.label.map { "\(entry.name) — \($0)" } ?? entry.name)
     }
 }
 
