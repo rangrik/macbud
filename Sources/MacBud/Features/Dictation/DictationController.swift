@@ -23,8 +23,8 @@ final class DictationController {
     }
     /// Settled words you may correct, plus the draft tail the engine still owns.
     private(set) var document = DictationTranscript()
-    /// The word whose correction popover is open. While it is set the microphone is paused.
-    private(set) var editingWordID: UUID?
+    /// True while you have the transcript open for editing. The microphone is paused throughout.
+    private(set) var isEditingTranscript = false
     private(set) var levels: [Float] = Array(repeating: 0, count: 28)
     private(set) var elapsed: TimeInterval = 0
     private(set) var locale: Locale?
@@ -54,7 +54,8 @@ final class DictationController {
     }
 
     var transcript: String { document.text }
-    var isEditingWord: Bool { editingWordID != nil }
+    /// Lets the notch hand keyboard focus to the transcript while you edit, and give it back after.
+    var onEditingChanged: ((Bool) -> Void)?
 
     convenience init(settings: AppSettings, context: ActionContext, clipboard: ClipboardStore,
                      history: DictationHistoryStore, words: DictationWordStore) {
@@ -93,7 +94,7 @@ final class DictationController {
         self.delivery = delivery
         pendingFinish = nil
         document = DictationTranscript()
-        editingWordID = nil
+        endEditing()
         elapsed = 0
         canRetry = false
         levels = Array(repeating: 0, count: levels.count)
@@ -138,7 +139,7 @@ final class DictationController {
             return
         }
         guard phase == .recording, let engine else { return }
-        cancelEditing()
+        commitEdit(nil)
         delivery = action
         finalize(engine, retry: false)
     }
@@ -182,7 +183,7 @@ final class DictationController {
 
     private func abandonSession() {
         pendingFinish = nil
-        editingWordID = nil
+        endEditing()
         attempt += 1
         operation?.cancel()
         operation = nil
@@ -223,48 +224,44 @@ final class DictationController {
         session.onError = nil
         phase = .idle
         document = DictationTranscript(settledText: trimmed)
-        editingWordID = nil
+        endEditing()
         canRetry = false
         engine = nil
         delivery = .insert
         if trimmed.isEmpty { onDidEnd?() } else { deliverText(trimmed, action) }
     }
 
-    // MARK: Correcting a word
+    // MARK: Editing the transcript
 
-    /// Opens the correction popover and pauses the microphone, so what you type is not transcribed.
-    func beginEditing(_ id: UUID) {
-        guard phase == .recording, document.word(id) != nil else { return }
-        editingWordID = id
+    /// Puts the transcript in your hands: the microphone stops so your typing is not transcribed,
+    /// and the notch takes keyboard focus.
+    func beginEdit() {
+        guard phase == .recording, !isEditingTranscript else { return }
+        isEditingTranscript = true
         engine?.setCapturePaused(true)
+        onEditingChanged?(true)
     }
 
-    /// Closes the popover and hands the microphone back.
-    func cancelEditing() {
-        guard editingWordID != nil else { return }
-        editingWordID = nil
+    /// Takes your edited text, works out what you changed, and starts listening again.
+    /// A one-word swap is worth learning; deleting words or typing new ones is not.
+    func commitEdit(_ edited: String?) {
+        guard isEditingTranscript else { return }
+        if let edited {
+            let (rebuilt, changes) = DictationEdit.reconcile(document.settledWords,
+                                                             with: DictationSegment.split(edited))
+            document.replaceSettled(with: rebuilt)
+            for lesson in changes.compactMap(\.lesson) {
+                words?.record(heard: lesson.heard, meant: lesson.meant, confirmed: lesson.confirmed)
+            }
+        }
+        endEditing()
         engine?.setCapturePaused(false)
     }
 
-    /// Replaces the word being edited and teaches it. A word the recogniser already doubted, or a
-    /// replacement taken from its own alternatives, is trusted at once; anything else waits for a
-    /// second sighting so one rewording never becomes a permanent rule.
-    func applyEdit(_ replacement: String) {
-        guard let id = editingWordID, let word = document.word(id) else { return }
-        let trimmed = replacement.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { cancelEditing(); return }
-        let trusted = word.isUncertain || word.alternatives.contains(trimmed)
-        if let previous = document.replace(id, with: trimmed) {
-            words?.record(heard: previous, meant: trimmed, confirmed: trusted)
-        }
-        cancelEditing()
-    }
-
-    /// Drops the word. Deletions teach nothing about spelling, so nothing is stored.
-    func removeEditingWord() {
-        guard let id = editingWordID else { return }
-        document.remove(id)
-        cancelEditing()
+    private func endEditing() {
+        guard isEditingTranscript else { return }
+        isEditingTranscript = false
+        onEditingChanged?(false)
     }
 
     private func fail(_ message: String, session: any DictationEngineSession, token: Int) {

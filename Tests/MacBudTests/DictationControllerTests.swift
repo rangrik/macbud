@@ -186,77 +186,30 @@ import Testing
         DictationController(makeEngine: { engine }, prepare: { _ in Locale(identifier: "en-US") }, deliver: deliver)
     }
 
-    @Test func leavingAWordAloneKeepsTheRecordingGoing() async throws {
+    @Test func leavingTheTranscriptAloneKeepsTheRecordingGoing() async throws {
         let engine = FakeDictationEngine()
         let controller = DictationController(makeEngine: { engine },
                                              prepare: { _ in Locale(identifier: "en-US") },
                                              deliver: { _, _ in })
+        var focus: [Bool] = []
+        controller.onEditingChanged = { focus.append($0) }
         controller.start()
         try await waitUntil { controller.phase == .recording }
         engine.onTranscript?(DictationTranscript(settledText: "ship the Codex"))
-        let word = try #require(controller.document.settled.first?.words.last?.id)
-        controller.beginEditing(word)
-        // Escape backs out of the word first. The recording must survive it.
-        controller.cancelEditing()
-        #expect(!controller.isEditingWord)
-        #expect(controller.phase == .recording)
+        controller.beginEdit()
+        #expect(engine.pauses == [true], "The microphone stops while you type")
+        #expect(focus == [true], "And the notch takes the keyboard")
+        controller.commitEdit(nil)
+        #expect(!controller.isEditingTranscript)
+        #expect(controller.phase == .recording, "Leaving the text alone must not end the recording")
         #expect(engine.pauses == [true, false])
+        #expect(focus == [true, false])
         #expect(controller.transcript == "ship the Codex")
         controller.cancel()
         #expect(controller.phase == .idle)
     }
 
-    @Test func theNotchUnderlinesTheWordItDoubtedAndOffersAFixInPlace() async throws {
-        let engine = FakeDictationEngine()
-        let words = DictationWordStore()
-        let controller = DictationController(makeEngine: { engine },
-                                             prepare: { _ in Locale(identifier: "en-US") },
-                                             deliver: { _, _ in }, words: words)
-        let settings = AppSettings(defaults: UserDefaults(suiteName: UUID().uuidString)!)
-        let notch = NotchController()
-        notch.dictationProvider = {
-            AnyView(DictationView(controller: controller, settings: settings, notchHeight: notch.state.geometry.notchRect.height))
-        }
-        notch.install()
-        notch.openDictation()
-        let host = try #require(notch.panel.contentView)
-        defer { controller.cancel(); notch.close(); notch.base.orderOut(nil) }
-        controller.start()
-        try await waitUntil { controller.phase == .recording }
-
-        var heard = DictationSegment(text: "okay so for the release notes let's ship the Codex integration today")
-        heard.words[9].confidence = 0.34
-        heard.words[9].alternatives = ["codecs", "Cortex"]
-        engine.onTranscript?(DictationTranscript(settled: [heard], draft: DictationSegment(text: "and then")))
-
-        func capture(_ name: String) throws {
-            try await1()
-            host.layoutSubtreeIfNeeded()
-            let bitmap = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
-            host.cacheDisplay(in: host.bounds, to: bitmap)
-            try #require(bitmap.representation(using: .png, properties: [:]))
-                .write(to: URL(fileURLWithPath: "/private/tmp/macbud-\(name).png"))
-        }
-        func await1() throws {}
-
-        try await Task.sleep(for: .milliseconds(200))
-        try capture("dictation-uncertain-word")
-        #expect(controller.document.uncertainWordCount == 1)
-
-        let misheard = try #require(controller.document.settled.first?.words[9].id)
-        controller.beginEditing(misheard)
-        #expect(controller.isEditingWord)
-        try await Task.sleep(for: .milliseconds(250))
-        try capture("dictation-correction-bar")
-
-        controller.applyEdit("Kodex")
-        try await Task.sleep(for: .milliseconds(200))
-        try capture("dictation-after-fix")
-        #expect(controller.transcript.contains("Kodex"))
-        #expect(words.rules.first?.meant == "Kodex")
-    }
-
-    @Test func fixingAWordPausesTheMicrophoneKeepsTheFixAndLearnsIt() async throws {
+    @Test func typingOverAWordKeepsTheFixAndLearnsIt() async throws {
         let engine = FakeDictationEngine()
         let words = DictationWordStore()
         var delivered: [String] = []
@@ -271,14 +224,12 @@ import Testing
         var heard = DictationSegment(text: "ship the Codex")
         heard.words[2].confidence = 0.3
         engine.onTranscript?(DictationTranscript(attemptID: attempt, settled: [heard]))
-        let misheard = try #require(controller.document.settled.first?.words.last?.id)
 
-        controller.beginEditing(misheard)
-        #expect(engine.pauses == [true], "The microphone must stop while you type")
-        controller.applyEdit("Kodex")
-        #expect(engine.pauses == [true, false], "And start again once you are done")
+        controller.beginEdit()
+        controller.commitEdit("ship the Kodex")
         #expect(controller.transcript == "ship the Kodex")
         #expect(words.rules.first?.isActive == true, "It doubted the word, so the fix is trusted at once")
+        #expect(engine.pauses == [true, false])
 
         // More speech arrives, then the recording ends: the correction has to still be there.
         engine.finalTranscript = DictationTranscript(attemptID: attempt,
@@ -288,42 +239,125 @@ import Testing
         #expect(delivered == ["ship the Kodex integration"])
     }
 
-    @Test func deletingAWordChangesTheTextButTeachesNothing() async throws {
+    @Test func deletingWordsChangesTheTextButTeachesNothing() async throws {
         let engine = FakeDictationEngine()
         let words = DictationWordStore()
         let controller = DictationController(makeEngine: { engine },
                                              prepare: { _ in Locale(identifier: "en-US") },
-                                             deliver: { _, _ in },
-                                             words: words)
+                                             deliver: { _, _ in }, words: words)
         controller.start()
         try await waitUntil { controller.phase == .recording }
-        engine.onTranscript?(DictationTranscript(settledText: "ship the umm Codex"))
-        let filler = try #require(controller.document.settled.first?.words[2].id)
-        controller.beginEditing(filler)
-        controller.removeEditingWord()
+        engine.onTranscript?(DictationTranscript(settledText: "ship the umm you know Codex"))
+        controller.beginEdit()
+        controller.commitEdit("ship the Codex")
         #expect(controller.transcript == "ship the Codex")
         #expect(words.rules.isEmpty)
-        #expect(!controller.isEditingWord)
+        #expect(!controller.isEditingTranscript)
         controller.cancel()
     }
 
-    @Test func aWordYouTaughtItIsHandedOverBeforeTheNextRecording() async throws {
+    @Test func theNotchUnderlinesTheWordItDoubtedAndLetsYouTypeOverIt() async throws {
         let engine = FakeDictationEngine()
         let words = DictationWordStore()
-        words.record(heard: "Codex", meant: "Kodex", confirmed: true)
-        var delivered: [String] = []
         let controller = DictationController(makeEngine: { engine },
                                              prepare: { _ in Locale(identifier: "en-US") },
-                                             deliver: { text, _ in delivered.append(text) },
-                                             words: words)
+                                             deliver: { _, _ in }, words: words)
+        let settings = AppSettings(defaults: UserDefaults(suiteName: UUID().uuidString)!)
+        let notch = NotchController()
+        var lines: [Int] = []
+        notch.dictationProvider = {
+            AnyView(DictationView(controller: controller, settings: settings,
+                                  notchHeight: notch.state.geometry.notchRect.height,
+                                  onLinesChanged: { lines.append($0); notch.setDictationLines($0) }))
+        }
+        notch.install()
+        notch.openDictation()
+        let host = try #require(notch.panel.contentView)
+        defer { controller.cancel(); notch.close(); notch.base.orderOut(nil) }
         controller.start()
         try await waitUntil { controller.phase == .recording }
-        #expect(engine.vocabulary == ["Kodex"], "The recogniser is told the word exists before you speak")
 
-        engine.result = "ship the Codex today"
-        controller.finish(.insert)
-        try await waitUntil { controller.phase == .idle }
-        #expect(delivered == ["ship the Kodex today"], "And anything it still gets wrong is rewritten on the way out")
+        var heard = DictationSegment(text: "okay so for the release notes let's ship the Codex integration today")
+        heard.words[9].confidence = 0.34
+        engine.onTranscript?(DictationTranscript(settled: [heard], draft: DictationSegment(text: "and then")))
+        try await Task.sleep(for: .milliseconds(250))
+        host.layoutSubtreeIfNeeded()
+        let bitmap = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+        host.cacheDisplay(in: host.bounds, to: bitmap)
+        try #require(bitmap.representation(using: .png, properties: [:]))
+            .write(to: URL(fileURLWithPath: "/private/tmp/macbud-dictation-editor.png"))
+
+        #expect(controller.document.uncertainWordCount == 1)
+        // The transcript is a real text view, so it is editable and selectable in place.
+        func textView(in view: NSView) -> NSTextView? {
+            if let text = view as? NSTextView { return text }
+            return view.subviews.lazy.compactMap { textView(in: $0) }.first
+        }
+        let text = try #require(textView(in: host))
+        #expect(text.isEditable)
+        #expect(text.isSelectable)
+        #expect(text.string.contains("Codex"))
+    }
+
+    @Test func youCanSelectAWordInTheNotchTypeOverItAndItSticks() async throws {
+        let engine = FakeDictationEngine()
+        let words = DictationWordStore()
+        let controller = DictationController(makeEngine: { engine },
+                                             prepare: { _ in Locale(identifier: "en-US") },
+                                             deliver: { _, _ in }, words: words)
+        let settings = AppSettings(defaults: UserDefaults(suiteName: UUID().uuidString)!)
+        let notch = NotchController()
+        notch.dictationProvider = {
+            AnyView(DictationView(controller: controller, settings: settings,
+                                  notchHeight: notch.state.geometry.notchRect.height,
+                                  onLinesChanged: { notch.setDictationLines($0) }))
+        }
+        controller.onEditingChanged = { notch.setDictationKeyboardFocus($0) }
+        notch.install()
+        notch.openDictation()
+        let host = try #require(notch.panel.contentView)
+        defer { controller.cancel(); notch.close(); notch.base.orderOut(nil) }
+        controller.start()
+        try await waitUntil { controller.phase == .recording }
+
+        var heard = DictationSegment(text: "let's ship the Codex today")
+        heard.words[3].confidence = 0.3
+        engine.onTranscript?(DictationTranscript(settled: [heard]))
+        try await Task.sleep(for: .milliseconds(200))
+        host.layoutSubtreeIfNeeded()
+
+        func textView(in view: NSView) -> NSTextView? {
+            if let text = view as? NSTextView { return text }
+            return view.subviews.lazy.compactMap { textView(in: $0) }.first
+        }
+        let text = try #require(textView(in: host))
+        #expect(notch.panel.acceptsKeyboardFocus == false, "The notch leaves the keyboard alone until you touch the text")
+
+        // Select "Codex" the way a double-click would, then type over it.
+        let range = (text.string as NSString).range(of: "Codex")
+        #expect(range.location != NSNotFound)
+        text.setSelectedRange(range)
+        controller.beginEdit()
+        #expect(notch.panel.acceptsKeyboardFocus, "Typing needs the keyboard, so the notch asks for it")
+        text.insertText("Kodex", replacementRange: range)
+        #expect(text.string == "let's ship the Kodex today", "The keystrokes have to land in the text")
+
+        controller.commitEdit(text.string)
+        #expect(controller.transcript == "let's ship the Kodex today")
+        #expect(words.rules.first?.heard == "Codex")
+        #expect(words.rules.first?.meant == "Kodex")
+        #expect(notch.panel.acceptsKeyboardFocus == false, "And handed straight back afterwards")
+    }
+
+    @Test func thePanelGrowsWithWhatYouSaidBetweenFourAndTenLines() {
+        let notch = NotchController()
+        let base = notch.state.metrics.dictationBaseHeight
+        let line = notch.state.metrics.dictationLineHeight
+        #expect(notch.state.metrics.dictationHeight(forLines: 1) == base, "Never smaller than four lines")
+        #expect(notch.state.metrics.dictationHeight(forLines: 4) == base)
+        #expect(notch.state.metrics.dictationHeight(forLines: 7) == base + 3 * line)
+        #expect(notch.state.metrics.dictationHeight(forLines: 10) == base + 6 * line)
+        #expect(notch.state.metrics.dictationHeight(forLines: 40) == base + 6 * line, "Never taller than ten")
     }
 
     private func waitUntil(_ condition: () -> Bool) async throws {

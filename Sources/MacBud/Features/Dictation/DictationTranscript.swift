@@ -49,11 +49,15 @@ nonisolated struct DictationTranscript: Equatable, Sendable {
     var attemptID = UUID()
     var settled: [DictationSegment] = []
     var draft: DictationSegment?
+    /// How many chunks the engine has handed over. Editing can merge chunks together, so the
+    /// segments on screen can no longer be counted to work out what is new.
+    var consumedSegments: Int
 
     init(attemptID: UUID = UUID(), settled: [DictationSegment] = [], draft: DictationSegment? = nil) {
         self.attemptID = attemptID
         self.settled = settled
         self.draft = draft
+        self.consumedSegments = settled.count
     }
 
     /// Convenience for callers that only have plain text.
@@ -81,43 +85,20 @@ nonisolated struct DictationTranscript: Equatable, Sendable {
     func merging(_ incoming: DictationTranscript) -> DictationTranscript {
         guard incoming.attemptID == attemptID else { return incoming }
         var result = self
-        if incoming.settled.count > settled.count {
-            result.settled.append(contentsOf: incoming.settled[settled.count...])
+        if incoming.settled.count > consumedSegments {
+            result.settled.append(contentsOf: incoming.settled[consumedSegments...])
+            result.consumedSegments = incoming.settled.count
         }
         result.draft = incoming.draft
         return result
     }
 
-    func word(_ id: UUID) -> DictationWord? {
-        for segment in settled {
-            if let word = segment.words.first(where: { $0.id == id }) { return word }
-        }
-        return nil
-    }
+    var settledWords: [DictationWord] { settled.flatMap(\.words) }
 
-    /// Replaces one settled word. Returns what it used to say, so the caller can teach the store.
-    @discardableResult
-    mutating func replace(_ id: UUID, with replacement: String) -> String? {
-        let words = DictationSegment.split(replacement)
-        for segmentIndex in settled.indices {
-            guard let wordIndex = settled[segmentIndex].words.firstIndex(where: { $0.id == id }) else { continue }
-            let previous = settled[segmentIndex].words[wordIndex].text
-            guard !words.isEmpty else {
-                settled[segmentIndex].words.remove(at: wordIndex)
-                return previous
-            }
-            let replacements = words.map {
-                DictationWord(text: $0, confidence: 1, alternatives: [], isEdited: true)
-            }
-            settled[segmentIndex].words.replaceSubrange(wordIndex...wordIndex, with: replacements)
-            return previous
-        }
-        return nil
-    }
-
-    @discardableResult
-    mutating func remove(_ id: UUID) -> String? {
-        replace(id, with: "")
+    /// Folds your edited words back in as one chunk. What the engine has already handed over is
+    /// remembered separately, so merging the next chunk still lands in the right place.
+    mutating func replaceSettled(with words: [DictationWord]) {
+        settled = words.isEmpty ? [] : [DictationSegment(words: words)]
     }
 
     /// Per-word alternatives, lifted from the recogniser's runner-up transcriptions. Only usable

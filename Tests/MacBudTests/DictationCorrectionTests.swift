@@ -12,19 +12,48 @@ import Testing
         #expect(DictationEngine.preset.attributeOptions.contains(.transcriptionConfidence))
     }
 
-    @Test func aCorrectionSurvivesTheWordsThatComeAfterIt() throws {
+    @Test func aCorrectionSurvivesTheWordsThatComeAfterIt() {
         let attempt = UUID()
         let opening = DictationSegment(text: "let's ship the Codex")
         var mine = DictationTranscript(attemptID: attempt, settled: [opening])
-        let misheard = try #require(mine.settled.first?.words.last?.id)
-        mine.replace(misheard, with: "Kodex")
+        // Editing collapses the chunks into one; the engine's count is remembered separately.
+        let (rebuilt, _) = DictationEdit.reconcile(mine.settledWords, with: ["let's", "ship", "the", "Kodex"])
+        mine.replaceSettled(with: rebuilt)
         #expect(mine.text == "let's ship the Kodex")
+        #expect(mine.settled.count == 1)
 
-        // The engine keeps sending its own settled chunks and swapping the draft tail.
         let fromEngine = DictationTranscript(attemptID: attempt,
                                              settled: [opening, DictationSegment(text: "integration today")],
                                              draft: DictationSegment(text: "and tomorrow"))
         #expect(mine.merging(fromEngine).text == "let's ship the Kodex integration today and tomorrow")
+    }
+
+    @Test func swappingOneWordIsLearnedAndEverythingElseIsNot() {
+        let words = DictationSegment(text: "ship the Codex today").words
+        let swap = DictationEdit.reconcile(words, with: ["ship", "the", "Kodex", "today"]).changes
+        #expect(swap == [.replaced(from: "Codex", to: "Kodex", wasUncertain: false)])
+        #expect(swap.compactMap(\.lesson).count == 1)
+
+        let deleted = DictationEdit.reconcile(words, with: ["ship", "the", "today"]).changes
+        #expect(deleted == [.removed("Codex")])
+        #expect(deleted.compactMap(\.lesson).isEmpty, "A deletion says nothing about spelling")
+
+        let wholeLine = DictationEdit.reconcile(words, with: []).changes
+        #expect(wholeLine.compactMap(\.lesson).isEmpty, "Nor does wiping the line")
+
+        let rewritten = DictationEdit.reconcile(words, with: ["ship", "the", "Kodex", "release", "today"]).changes
+        #expect(rewritten.compactMap(\.lesson).isEmpty, "One word becoming two is a rewording, not a fix")
+    }
+
+    @Test func editingKeepsTheConfidenceOfWordsYouLeftAlone() {
+        var segment = DictationSegment(text: "ship the Codex")
+        segment.words[0].confidence = 0.4
+        segment.words[2].confidence = 0.3
+        let (rebuilt, changes) = DictationEdit.reconcile(segment.words, with: ["ship", "the", "Kodex"])
+        #expect(rebuilt[0].isUncertain, "You did not touch it, so it stays flagged")
+        #expect(!rebuilt[2].isUncertain, "The word you fixed is yours now")
+        #expect(rebuilt[2].isEdited)
+        #expect(changes == [.replaced(from: "Codex", to: "Kodex", wasUncertain: true)])
     }
 
     @Test func startingOverReplacesEverything() {

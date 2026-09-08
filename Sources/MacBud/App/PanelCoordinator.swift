@@ -201,7 +201,8 @@ final class PanelCoordinator {
         if state.isDictating {
             switch command {
             case .close:
-                if dictation.isEditingWord { dictation.cancelEditing() } else { dictation.cancel() }
+                // Escape leaves the transcript you are editing before it cancels the recording.
+                if dictation.isEditingTranscript { dictation.commitEdit(nil) } else { dictation.cancel() }
             case .startDictation:
                 if dictation.canRetry { dictation.retry() } else { dictation.finish(.insert) }
             default: return false
@@ -496,7 +497,7 @@ final class HotKeyBinder {
         escapeMonitor.start { [weak self] in
             guard let dictation = self?.coordinator.dictation else { return }
             // While a word is open for correction, Escape backs out of the word, not the recording.
-            if dictation.isEditingWord { dictation.cancelEditing() } else { dictation.cancel() }
+            if dictation.isEditingTranscript { dictation.commitEdit(nil) } else { dictation.cancel() }
         }
         do {
             escapeID = try center.register(HotKey(keyCode: 53, modifiers: [])) { [weak self] in

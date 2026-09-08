@@ -53,6 +53,18 @@ nonisolated struct NotchMetrics: Equatable, Sendable {
     var islandSize = CGSize(width: 760, height: 500)
     var toastSize = CGSize(width: 300, height: 76)
     var dictationSize = CGSize(width: 560, height: 238)
+    /// The dictation panel grows with what you have said, between these two.
+    var dictationMinLines = 4
+    var dictationMaxLines = 10
+    var dictationLineHeight: CGFloat = 19
+
+    /// The four-line panel. `dictationSize.height` moves with the text; this does not.
+    var dictationBaseHeight: CGFloat = 238
+
+    func dictationHeight(forLines lines: Int) -> CGFloat {
+        let clamped = min(max(lines, dictationMinLines), dictationMaxLines)
+        return dictationBaseHeight + CGFloat(clamped - dictationMinLines) * dictationLineHeight
+    }
     var tabExtension: CGFloat = 42
     var tabHoverGrowth = CGSize(width: 6, height: 4)
     var dictationBottomRadius: CGFloat = 26

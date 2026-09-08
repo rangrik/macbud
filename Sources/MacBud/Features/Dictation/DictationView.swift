@@ -9,15 +9,16 @@ struct DictationView: View {
     var shortcut: String?
     /// Pointing at the transcript shrinks the meter and gives the words its room.
     @State private var hoveringTranscript = false
+    var onLinesChanged: (Int) -> Void = { _ in }
 
     var body: some View {
         VStack(spacing: 0) {
             Color.clear.frame(height: notchHeight + 6)
-            LevelMeter(levels: controller.levels, active: controller.phase == .recording && !controller.isEditingWord)
-                .frame(height: hoveringTranscript || controller.isEditingWord ? 8 : 32)
+            LevelMeter(levels: controller.levels, active: controller.phase == .recording && !controller.isEditingTranscript)
+                .frame(height: hoveringTranscript || controller.isEditingTranscript ? 8 : 32)
                 .padding(.horizontal, 20)
                 .animation(.easeOut(duration: 0.18), value: hoveringTranscript)
-                .animation(.easeOut(duration: 0.18), value: controller.isEditingWord)
+                .animation(.easeOut(duration: 0.18), value: controller.isEditingTranscript)
             HStack(spacing: 8) {
                 Text(status).font(Theme.caption).foregroundStyle(Theme.textSecondary)
                 if isPreparing || controller.phase == .finalizing {
@@ -29,35 +30,24 @@ struct DictationView: View {
             }
             .padding(.horizontal, 20).padding(.top, 5)
 
-            ScrollViewReader { proxy in
-                ScrollView(.vertical) {
-                    VStack(alignment: .leading, spacing: 0) {
-                        if showsWords {
-                            DictationTranscriptView(controller: controller, isInteractive: controller.phase == .recording)
-                                .padding(.horizontal, 20).padding(.vertical, 12)
-                        } else {
-                            Text(displayText)
-                                .font(.system(size: 14)).foregroundStyle(transcriptColor)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .padding(.horizontal, 20).padding(.vertical, 12)
-                        }
-                        Color.clear.frame(height: 1).id("transcript-end")
-                    }
+            Group {
+                if showsEditor {
+                    DictationTranscriptEditor(
+                        document: controller.document,
+                        isEditing: controller.isEditingTranscript,
+                        placeholder: displayText,
+                        onBeginEditing: { controller.beginEdit() },
+                        onCommit: { controller.commitEdit($0) },
+                        onLinesChanged: onLinesChanged)
+                } else {
+                    Text(displayText)
+                        .font(.system(size: 14)).foregroundStyle(transcriptColor)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                // Wait for the measured scroll range to change so new wrapped lines are laid out.
-                .onScrollGeometryChange(for: CGFloat.self) { geometry in
-                    geometry.contentSize.height - geometry.containerSize.height
-                } action: { _, _ in
-                    proxy.scrollTo("transcript-end", anchor: .bottom)
-                }
-                .onChange(of: controller.transcript) { _, _ in proxy.scrollTo("transcript-end", anchor: .bottom) }
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .padding(.horizontal, 20).padding(.vertical, 12)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .onHover { hoveringTranscript = $0 }
-            if let word = editingWord {
-                Rectangle().fill(Theme.separator).frame(height: 1)
-                DictationCorrectionBar(controller: controller, word: word).id(word.id)
-            }
             Rectangle().fill(Theme.separator).frame(height: 1)
             HStack(spacing: 12) {
                 if holdingToTalk, controller.phase == .recording {
@@ -65,8 +55,8 @@ struct DictationView: View {
                 }
                 Spacer(minLength: 0)
                 switch controller.phase {
-                case .recording where controller.isEditingWord:
-                    action("Leave it", keys: "⎋") { controller.cancelEditing() }
+                case .recording where controller.isEditingTranscript:
+                    action("Done", keys: "⏎") { controller.commitEdit(nil) }
                 case .recording:
                     action("Copy", systemImage: "doc.on.doc") { controller.finish(.copy) }
                     action("Insert", keys: holdingToTalk ? "" : (shortcut ?? settings.dictationHotKey?.displayString ?? "")) {
@@ -93,19 +83,16 @@ struct DictationView: View {
     }
 
     private var isPreparing: Bool { if case .preparing = controller.phase { true } else { false } }
-    private var editingWord: DictationWord? {
-        controller.editingWordID.flatMap { controller.document.word($0) }
-    }
-    /// Words render individually once there are any, so each one can be corrected.
-    private var showsWords: Bool {
+    /// The transcript is a real text field while recording, so you can fix it where it stands.
+    private var showsEditor: Bool {
         switch controller.phase {
-        case .recording, .finalizing: !controller.document.isEmpty
+        case .recording, .finalizing: true
         default: false
         }
     }
     private var status: String {
         switch controller.phase {
-        case .recording: controller.isEditingWord ? "Paused · fixing a word" : "Listening"
+        case .recording: controller.isEditingTranscript ? "Paused · editing" : "Listening"
         case .preparing: "Preparing"
         case .finalizing: "Finishing"
         case .failed: "Recording paused"
