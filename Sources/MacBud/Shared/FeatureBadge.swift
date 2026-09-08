@@ -2,7 +2,7 @@ import SwiftUI
 
 /// A small coordinated palette keeps each tool recognizable against the black notch.
 enum FeatureArt {
-    case clipboard, snippets, screenshots, dictation, keepAwake
+    case clipboard, snippets, screenshots, dictation, keepAwake, apps
 
     var colors: [Color] {
         switch self {
@@ -11,6 +11,7 @@ enum FeatureArt {
         case .screenshots: [Color(red: 0.36, green: 0.94, blue: 0.72), Color(red: 0.06, green: 0.64, blue: 0.60)]
         case .dictation: [Color(red: 0.82, green: 0.57, blue: 1), Color(red: 0.48, green: 0.32, blue: 0.94)]
         case .keepAwake: [Color(red: 1, green: 0.85, blue: 0.34), Color(red: 1, green: 0.49, blue: 0.19)]
+        case .apps: [Color(red: 1, green: 0.44, blue: 0.46), Color(red: 0.83, green: 0.12, blue: 0.32)]
         }
     }
 
@@ -21,6 +22,7 @@ enum FeatureArt {
         case .screenshots: "photo.fill"
         case .dictation: "waveform"
         case .keepAwake: "sun.max.fill"
+        case .apps: "square.grid.2x2.fill"
         }
     }
 }
@@ -32,6 +34,7 @@ extension Section {
         case .snippets: .snippets
         case .screenshots: .screenshots
         case .dictationHistory: .dictation
+        case .apps: .apps
         }
     }
 }

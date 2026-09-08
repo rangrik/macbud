@@ -6,7 +6,7 @@ nonisolated enum BindableCommand: String, CaseIterable, Codable, Sendable {
     case moveUp, moveDown, moveLeft, moveRight, pageUp, pageDown, moveToStart, moveToEnd
     case primaryAction, secondaryAction
     case delete, clearAll, togglePin, saveAsSnippet, newItem, editItem, revealInFinder, quickLook
-    case nextSection, previousSection, selectSection1, selectSection2, selectSection3, selectSection4
+    case nextSection, previousSection, selectSection1, selectSection2, selectSection3, selectSection4, selectSection5
     case startDictation, close, openSettings
 
     var panelCommand: PanelCommand {
@@ -35,6 +35,7 @@ nonisolated enum BindableCommand: String, CaseIterable, Codable, Sendable {
         case .selectSection2: .selectSectionAt(1)
         case .selectSection3: .selectSectionAt(2)
         case .selectSection4: .selectSectionAt(3)
+        case .selectSection5: .selectSectionAt(4)
         case .startDictation: .startDictation
         case .close: .close
         case .openSettings: .openSettings
@@ -67,6 +68,7 @@ nonisolated enum BindableCommand: String, CaseIterable, Codable, Sendable {
         case .selectSection2: "Go to section 2"
         case .selectSection3: "Go to section 3"
         case .selectSection4: "Go to section 4"
+        case .selectSection5: "Go to section 5"
         case .startDictation: "Start dictation"
         case .close: "Close"
         case .openSettings: "Open Settings"
@@ -77,7 +79,7 @@ nonisolated enum BindableCommand: String, CaseIterable, Codable, Sendable {
         switch self {
         case .moveUp, .moveDown, .moveLeft, .moveRight, .pageUp, .pageDown, .moveToStart, .moveToEnd: "Navigation"
         case .primaryAction, .secondaryAction, .delete, .clearAll, .togglePin, .saveAsSnippet, .newItem, .editItem, .revealInFinder, .quickLook: "Actions"
-        case .nextSection, .previousSection, .selectSection1, .selectSection2, .selectSection3, .selectSection4: "Sections"
+        case .nextSection, .previousSection, .selectSection1, .selectSection2, .selectSection3, .selectSection4, .selectSection5: "Sections"
         case .startDictation, .close, .openSettings: "General"
         }
     }
@@ -86,7 +88,7 @@ nonisolated enum BindableCommand: String, CaseIterable, Codable, Sendable {
 
     /// ⌘1…⌘4 address tab positions, so they follow the order set in Settings › Features.
     /// One slot per section: `sectionSlotsCoverEverySection` keeps the two lists in step.
-    static let sectionSlots: [BindableCommand] = [.selectSection1, .selectSection2, .selectSection3, .selectSection4]
+    static let sectionSlots: [BindableCommand] = [.selectSection1, .selectSection2, .selectSection3, .selectSection4, .selectSection5]
 
     static func sectionSlot(at index: Int) -> BindableCommand? {
         sectionSlots.indices.contains(index) ? sectionSlots[index] : nil
@@ -130,6 +132,7 @@ nonisolated struct KeyBindings: Codable, Equatable, Sendable {
         .selectSection2: [key(kVK_ANSI_2, .command)],
         .selectSection3: [key(kVK_ANSI_3, .command)],
         .selectSection4: [key(kVK_ANSI_4, .command)],
+        .selectSection5: [key(kVK_ANSI_5, .command)],
         .startDictation: [key(kVK_ANSI_D, .command)],
         .close: [key(kVK_Escape)],
         .openSettings: [key(kVK_ANSI_Comma, .command)],

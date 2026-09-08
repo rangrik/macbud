@@ -45,6 +45,7 @@ final class AppSettings {
         .clipboard: HotKey(keyCode: UInt16(kVK_ANSI_V), modifiers: [.option, .shift]),
         .snippets: HotKey(keyCode: UInt16(kVK_ANSI_S), modifiers: [.option, .shift]),
         .screenshots: HotKey(keyCode: UInt16(kVK_ANSI_4), modifiers: [.option, .shift]),
+        .apps: HotKey(keyCode: UInt16(kVK_ANSI_A), modifiers: [.option, .shift]),
     ]
 
     static let defaultIgnoredBundleIDs = [
@@ -77,6 +78,17 @@ final class AppSettings {
         sectionOrder = Self.normalizedSectionOrder((defaults.stringArray(forKey: "sectionOrder") ?? []).compactMap(Section.init(rawValue:)))
         disabledFeatures = Set((defaults.stringArray(forKey: "disabledFeatures") ?? []).compactMap(AppFeature.init(rawValue:)))
         isLoading = false
+        backfillAppsHotKey()
+    }
+
+    /// Anyone upgrading already has a saved shortcut dictionary, so a section added after their last
+    /// launch arrives with no global shortcut at all. Fill it in once, and never fight a later edit.
+    private func backfillAppsHotKey() {
+        guard let wanted = Self.defaultSectionHotKeys[.apps], sectionHotKeys[.apps] == nil,
+              !defaults.bool(forKey: "migratedAppsHotKey") else { return }
+        defaults.set(true, forKey: "migratedAppsHotKey")
+        guard !sectionHotKeys.values.contains(wanted) else { return }
+        sectionHotKeys[.apps] = wanted
     }
 
     var enabledSections: [Section] { sectionOrder.filter { isEnabled($0.feature) } }

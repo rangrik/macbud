@@ -18,6 +18,8 @@ final class PanelCoordinator {
     let dictationHistoryStore: DictationHistoryStore
     let dictationWordStore: DictationWordStore
     let dictationHistory: DictationHistorySectionController
+    let appIndex: AppIndex
+    let apps: AppsSectionController
     private(set) var isHoldingToTalk = false
     private(set) var dictationSessionHotKey: HotKey?
     let keepAwake = KeepAwakeController()
@@ -27,13 +29,15 @@ final class PanelCoordinator {
     @ObservationIgnored private var settingsVisibleAtOpen = false
 
     init(state: NotchState, notch: NotchController, settings: AppSettings,
-         clipboardStore: ClipboardStore, snippetStore: SnippetStore, library: ScreenshotLibrary) {
+         clipboardStore: ClipboardStore, snippetStore: SnippetStore, library: ScreenshotLibrary,
+         appIndex: AppIndex = AppIndex()) {
         self.state = state
         self.notch = notch
         self.settings = settings
         self.clipboardStore = clipboardStore
         self.snippetStore = snippetStore
         self.library = library
+        self.appIndex = appIndex
         context = ActionContext(state: state, notch: notch, settings: settings, frontmost: frontmost)
         clipboard = ClipboardSectionController(store: clipboardStore, context: context)
         snippets = SnippetsSectionController(store: snippetStore, clipboard: clipboardStore, context: context)
@@ -43,6 +47,7 @@ final class PanelCoordinator {
         dictationHistory = DictationHistorySectionController(store: dictationHistoryStore, context: context, snippets: snippets)
         dictation = DictationController(settings: settings, context: context, clipboard: clipboardStore,
                                         history: dictationHistoryStore, words: dictationWordStore)
+        apps = AppsSectionController(index: appIndex, context: context)
         clipboard.snippets = snippets
         dictation.onDidEnd = { [weak self] in self?.notch.close() }
         dictation.onActivityChanged = { [weak self] active in
@@ -166,6 +171,7 @@ final class PanelCoordinator {
         case .snippets: snippets.queryChanged()
         case .screenshots: screenshots.queryChanged()
         case .dictationHistory: dictationHistory.queryChanged()
+        case .apps: apps.queryChanged()
         }
     }
 
@@ -175,6 +181,7 @@ final class PanelCoordinator {
         case .snippets: snippets.didShow()
         case .screenshots: screenshots.didShow()
         case .dictationHistory: dictationHistory.didShow()
+        case .apps: apps.didShow()
         }
     }
 
@@ -247,6 +254,7 @@ final class PanelCoordinator {
         case .snippets: snippets.handle(command)
         case .screenshots: screenshots.handle(command)
         case .dictationHistory: dictationHistory.handle(command)
+        case .apps: apps.handle(command)
         }
     }
 
@@ -324,6 +332,9 @@ final class PanelCoordinator {
                      hint(.revealInFinder, "Finder"), hint(.delete, "Trash")]
         case .dictationHistory:
             hints = [hint(copy, "Copy", systemImage: "doc.on.doc"), hint(paste, "Insert"), hint(.saveAsSnippet, "Save as snippet"), hint(.delete, "Delete")]
+        case .apps:
+            hints = [hint(.primaryAction, apps.selected?.isRunning == true ? "Switch to app" : "Open app", systemImage: "arrow.up.forward.app"),
+                     Hint(keys: "↑↓←→", label: "Move", command: nil)]
         }
         if !snippets.isEditing { hints.append(hint(.nextSection, "Section")) }
         return hints.filter { $0.command != .saveAsSnippet || settings.isEnabled(.snippets) }
@@ -353,6 +364,9 @@ final class PanelCoordinator {
             "installedInApplications": AppDelegate.isInstalledInApplications,
             "bundlePath": Bundle.main.bundleURL.path,
             "showsTab": notch.showsTab,
+            "sectionHotKeys": Dictionary(uniqueKeysWithValues: settings.sectionHotKeys.map { ($0.key.rawValue, $0.value.displayString) }),
+            "registeredSectionHotKeys": Dictionary(uniqueKeysWithValues: (hotKeys?.registeredSectionHotKeys ?? [:]).map { ($0.key.rawValue, $0.value.displayString) }),
+            "sectionHotKeyProblems": Dictionary(uniqueKeysWithValues: (hotKeys?.sectionProblems ?? [:]).map { ($0.key.rawValue, $0.value) }),
             "activeDisplay": notch.state.geometry.displayID,
             "displays": notch.screens.map { screen in
                 ["id": screen.displayID, "active": screen.isActive, "physicalNotch": screen.geometry.hasPhysicalNotch,
@@ -380,6 +394,13 @@ final class PanelCoordinator {
             d["selectedIndex"] = dictationHistory.selectedIndex
             d["results"] = dictationHistory.results.prefix(20).map(\.text)
             d["selected"] = dictationHistory.selected?.text ?? ""
+        case .apps:
+            let grid = apps.grid
+            d["selectedIndex"] = apps.selectedIndex
+            d["results"] = grid.items.prefix(30).map(\.name)
+            d["selected"] = apps.selected?.name ?? ""
+            d["appGroups"] = grid.groups.map { ["title": $0.title, "items": $0.items.map(\.name)] }
+            d["installedApps"] = appIndex.installed.count
         }
         return d
     }
@@ -394,6 +415,8 @@ final class HotKeyBinder {
     private(set) var toggleProblem: String?
     private(set) var dictationProblem: String?
     private(set) var holdToTalkProblem: String?
+    private(set) var sectionProblems: [Section: String] = [:]
+    private(set) var registeredSectionHotKeys: [Section: HotKey] = [:]
     private var escapeID: UInt32?
     private var sessionTriggerID: UInt32?
     private let escapeMonitor = DictationEscapeMonitor()
@@ -414,6 +437,8 @@ final class HotKeyBinder {
         toggleProblem = nil
         dictationProblem = nil
         holdToTalkProblem = nil
+        sectionProblems = [:]
+        registeredSectionHotKeys = [:]
         if let wanted = settings.toggleHotKey {
             do {
                 try center.register(wanted) { [weak self] in self?.coordinator.toggle() }
@@ -428,8 +453,13 @@ final class HotKeyBinder {
             }
         }
         for (section, hotKey) in settings.sectionHotKeys where settings.isEnabled(section.feature) {
-            do { try center.register(hotKey) { [weak self] in self?.coordinator.open(section: section) } }
-            catch { Log.input.error("section hotkey \(section.rawValue) failed: \(error.localizedDescription)") }
+            do {
+                try center.register(hotKey) { [weak self] in self?.coordinator.open(section: section) }
+                registeredSectionHotKeys[section] = hotKey
+            } catch {
+                sectionProblems[section] = error.localizedDescription
+                Log.input.error("section hotkey \(section.rawValue) failed: \(error.localizedDescription)")
+            }
         }
         if settings.isEnabled(.dictation), let hotKey = settings.dictationHotKey {
             do { try center.register(hotKey) { [weak self] in self?.coordinator.startDictation(trigger: hotKey) } }

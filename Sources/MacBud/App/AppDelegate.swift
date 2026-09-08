@@ -48,6 +48,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 settings.hasMigratedDictationHistory = true
             }
         }
+        if settings.isEnabled(.apps) { coordinator.appIndex.refresh(force: true) }
         monitor = ClipboardMonitor(store: clipboardStore, settings: settings)
         if settings.isEnabled(.clipboard) { monitor.start() }
 
@@ -108,6 +109,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 guard let self else { return }
                 applyLibrarySettings()
                 if settings.isEnabled(.clipboard) { monitor.start() } else { monitor.stop() }
+                if settings.isEnabled(.apps) { coordinator.appIndex.refresh() }
                 coordinator.applyFeatureSettings()
                 clipboardStore.limit = settings.historyLimit
                 coordinator.dictationHistoryStore.limit = settings.historyLimit
