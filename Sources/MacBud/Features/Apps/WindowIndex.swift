@@ -1,20 +1,24 @@
 import AppKit
 import ApplicationServices
 
-/// One window you can jump to. Identity is the app plus the window's slot in that app's own list,
-/// because AX gives no stable id and titles change under you as you type.
-nonisolated struct WindowEntry: Identifiable, Hashable, Sendable {
+/// One window you can jump to. It carries the accessibility element itself, because an app's window
+/// list is front-to-back order and reshuffles the moment you raise anything — an index into it is
+/// stale as soon as it is used. Identity is the element's own hash, which outlives the reordering.
+struct WindowEntry: Identifiable, Equatable {
+    let element: AXUIElement
     let bundleID: String
     let appName: String
     let appURL: URL
     let title: String
-    /// Position in the owning app's AX window list, which is that app's own front-to-back order.
-    let slot: Int
     var isMinimized = false
+    /// The window this app would show if you activated it — the one ⌘⇥ alone would land on.
+    var isFocused = false
 
-    var id: String { "\(bundleID)#\(slot)" }
+    var id: String { "\(bundleID)#\(CFHash(element))" }
     /// Falls back to the app name so a titleless window is still nameable in the list.
     var displayTitle: String { title.isEmpty ? appName : title }
+
+    static func == (lhs: WindowEntry, rhs: WindowEntry) -> Bool { CFEqual(lhs.element, rhs.element) }
 }
 
 /// Every open window, and how to bring one to the front. Uses the Accessibility API, which MacBud
@@ -26,11 +30,13 @@ enum WindowIndex {
         return AppIndex.runningInFrontToBackOrder().flatMap { app -> [WindowEntry] in
             guard let bundleID = app.bundleIdentifier, let url = app.bundleURL else { return [] }
             let name = app.localizedName ?? url.deletingPathExtension().lastPathComponent
-            return elements(for: app).prefix(limitPerApp).enumerated().compactMap { slot, element in
+            let focused = focusedWindow(AXUIElementCreateApplication(app.processIdentifier))
+            return elements(for: app).prefix(limitPerApp).compactMap { element in
                 guard isRealWindow(element) else { return nil }
-                return WindowEntry(bundleID: bundleID, appName: name, appURL: url,
-                                   title: string(element, kAXTitleAttribute) ?? "", slot: slot,
-                                   isMinimized: bool(element, kAXMinimizedAttribute) ?? false)
+                return WindowEntry(element: element, bundleID: bundleID, appName: name, appURL: url,
+                                   title: string(element, kAXTitleAttribute) ?? "",
+                                   isMinimized: bool(element, kAXMinimizedAttribute) ?? false,
+                                   isFocused: focused.map { CFEqual($0, element) } ?? false)
             }
         }
     }
@@ -40,9 +46,7 @@ enum WindowIndex {
     @discardableResult
     static func raise(_ entry: WindowEntry) -> Bool {
         guard let app = NSRunningApplication.runningApplications(withBundleIdentifier: entry.bundleID).first else { return false }
-        let list = elements(for: app)
-        guard list.indices.contains(entry.slot) else { return false }
-        let window = list[entry.slot]
+        let window = entry.element
         if bool(window, kAXMinimizedAttribute) == true {
             AXUIElementSetAttributeValue(window, kAXMinimizedAttribute as CFString, kCFBooleanFalse)
         }
@@ -50,7 +54,7 @@ enum WindowIndex {
         AXUIElementSetAttributeValue(AXUIElementCreateApplication(app.processIdentifier),
                                      kAXFocusedWindowAttribute as CFString, window)
         let activated = app.activate(options: [.activateAllWindows])
-        Log.app.info("raise \(entry.appName) slot \(entry.slot): raised=\(raised) activated=\(activated)")
+        Log.app.info("raise \(entry.appName) · \(entry.displayTitle): raised=\(raised) activated=\(activated)")
         return raised || activated
     }
 
@@ -69,7 +73,10 @@ enum WindowIndex {
                         ["role": string(element, kAXRoleAttribute) ?? "-",
                          "subrole": string(element, kAXSubroleAttribute) ?? "-",
                          "title": string(element, kAXTitleAttribute) ?? "-",
-                         "size": size(element).map { "\(Int($0.width))x\(Int($0.height))" } ?? "-"]
+                         "size": size(element).map { "\(Int($0.width))x\(Int($0.height))" } ?? "-",
+                         "origin": position(element).map { "\(Int($0.x)),\(Int($0.y))" } ?? "-",
+                         "focused": focusedWindow(AXUIElementCreateApplication(app.processIdentifier))
+                             .map { CFEqual($0, element) } ?? false]
                     }]
         }
     }
@@ -132,6 +139,15 @@ enum WindowIndex {
         var value: CFTypeRef?
         guard AXUIElementCopyAttributeValue(element, attribute as CFString, &value) == .success else { return nil }
         return (value as? NSNumber)?.boolValue
+    }
+
+    private static func position(_ element: AXUIElement) -> CGPoint? {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, kAXPositionAttribute as CFString, &value) == .success,
+              let axValue = value, CFGetTypeID(axValue) == AXValueGetTypeID() else { return nil }
+        var result = CGPoint.zero
+        guard AXValueGetValue(axValue as! AXValue, .cgPoint, &result) else { return nil }
+        return result
     }
 
     private static func size(_ element: AXUIElement) -> CGSize? {

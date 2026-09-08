@@ -89,7 +89,8 @@ enum Automation {
         case "windows":
             guard let path = params["path"] else { return }
             let windows = WindowIndex.windows().map {
-                ["app": $0.appName, "title": $0.displayTitle, "slot": $0.slot, "minimized": $0.isMinimized, "id": $0.id]
+                ["app": $0.appName, "title": $0.displayTitle,
+                 "minimized": $0.isMinimized, "focused": $0.isFocused, "id": $0.id]
             }
             if let data = try? JSONSerialization.data(withJSONObject: windows, options: [.prettyPrinted]) {
                 try? data.write(to: URL(fileURLWithPath: path))
