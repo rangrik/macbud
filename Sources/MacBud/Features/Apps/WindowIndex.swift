@@ -76,25 +76,32 @@ enum WindowIndex {
 
     /// Diagnostics for the automation surface: what AX and the window server each report, before
     /// any filtering. This is what tells an empty switcher entry apart from an app on another Space.
+    /// Written out step by step with explicit types — as one literal it exceeds the type-check
+    /// budget the release build enforces.
     static func diagnostics() -> [[String: Any]] {
         let onScreen = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID)
             as? [[String: Any]] ?? []
-        return AppIndex.runningInFrontToBackOrder().map { app in
-            let element = AXUIElementCreateApplication(app.processIdentifier)
-            return ["app": app.localizedName ?? "?",
-                    "axWindows": copyWindows(element).count,
-                    "onScreenWindows": onScreen.filter { $0[kCGWindowOwnerPID as String] as? pid_t == app.processIdentifier }.count,
-                    "focusedWindow": focusedWindow(element).flatMap { string($0, kAXTitleAttribute) } ?? "-",
-                    "listed": elements(for: app).filter(isRealWindow).map { element in
-                        ["role": string(element, kAXRoleAttribute) ?? "-",
-                         "subrole": string(element, kAXSubroleAttribute) ?? "-",
-                         "title": string(element, kAXTitleAttribute) ?? "-",
-                         "size": size(element).map { "\(Int($0.width))x\(Int($0.height))" } ?? "-",
-                         "origin": position(element).map { "\(Int($0.x)),\(Int($0.y))" } ?? "-",
-                         "focused": focusedWindow(AXUIElementCreateApplication(app.processIdentifier))
-                             .map { CFEqual($0, element) } ?? false]
-                    }]
+        var report: [[String: Any]] = []
+        for app in AppIndex.runningInFrontToBackOrder() {
+            let pid: pid_t = app.processIdentifier
+            let element = AXUIElementCreateApplication(pid)
+            let visible = onScreen.filter { ($0[kCGWindowOwnerPID as String] as? pid_t) == pid }
+            var listed: [[String: Any]] = []
+            for window in elements(for: app) where isRealWindow(window) {
+                let box: String = frame(window).map { "\(Int($0.width))x\(Int($0.height))" } ?? "-"
+                listed.append(["role": string(window, kAXRoleAttribute) ?? "-",
+                               "subrole": string(window, kAXSubroleAttribute) ?? "-",
+                               "title": string(window, kAXTitleAttribute) ?? "-",
+                               "size": box])
+            }
+            let focused: String = focusedWindow(element).flatMap { string($0, kAXTitleAttribute) } ?? "-"
+            report.append(["app": app.localizedName ?? "?",
+                           "axWindows": copyWindows(element).count,
+                           "onScreenWindows": visible.count,
+                           "focusedWindow": focused,
+                           "listed": listed])
         }
+        return report
     }
 
     // MARK: - Accessibility plumbing
