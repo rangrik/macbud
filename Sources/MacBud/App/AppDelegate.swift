@@ -19,12 +19,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         notch.keyHandler = { [coordinator] event in coordinator!.handle(event: event) }
         notch.willOpen = { [coordinator] in coordinator!.willOpen() }
         notch.contentProvider = { [coordinator] in IslandContentView(state: coordinator!.state, coordinator: coordinator!) }
-        notch.dictationProvider = { [coordinator, settings] in
+        notch.dictationProvider = { [coordinator, settings, notch] in
             AnyView(DictationView(controller: coordinator!.dictation, settings: settings,
                                  notchHeight: coordinator!.state.geometry.notchRect.height,
                                  holdingToTalk: coordinator!.isHoldingToTalk,
-                                 shortcut: coordinator!.dictationSessionHotKey?.displayString))
+                                 shortcut: coordinator!.dictationSessionHotKey?.displayString,
+                                 onLinesChanged: { notch.setDictationLines($0) }))
         }
+        coordinator.dictation.onEditingChanged = { [notch] editing in notch.setDictationKeyboardFocus(editing) }
         notch.didClose = { [coordinator] in coordinator!.didClose() }
         notch.state.showsNotchTab = settings.showNotchTab
         notch.state.notchStatusSymbol = settings.isEnabled(.clipboard) && settings.clipboardPaused ? "pause.fill" : nil

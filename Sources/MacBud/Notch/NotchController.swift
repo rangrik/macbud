@@ -133,6 +133,21 @@ final class NotchController {
         if state.isOpen { close() } else { open(on: screen) }
     }
 
+    /// Grows the dictation panel with what you have said — four lines at rest, ten at most.
+    func setDictationLines(_ lines: Int) {
+        let height = state.metrics.dictationHeight(forLines: lines)
+        guard state.phase == .dictation, abs(state.metrics.dictationSize.height - height) > 0.5 else { return }
+        state.metrics.dictationSize.height = height
+        panel.setFrame(state.metrics.dictationWindowFrame(for: state.geometry), display: true)
+    }
+
+    /// Lets the transcript take keystrokes while you edit it, and hands focus back afterwards.
+    func setDictationKeyboardFocus(_ wanted: Bool) {
+        guard state.phase == .dictation else { return }
+        panel.acceptsKeyboardFocus = wanted
+        if wanted { panel.makeKey() } else if panel.isKeyWindow { panel.resignKey() }
+    }
+
     func openDictation() {
         retargetToActiveScreen()
         collapseTask?.cancel()
@@ -144,6 +159,7 @@ final class NotchController {
         state.footerHint = nil
         panel.acceptsKeyboardFocus = false
         state.panelUsesDictationSize = true
+        state.metrics.dictationSize.height = state.metrics.dictationBaseHeight
         panel.setFrame(state.metrics.dictationWindowFrame(for: state.geometry), display: false)
         activeNotch.window.orderOut(nil)
         panel.orderFrontRegardless()
