@@ -47,7 +47,8 @@ final class WindowPreviewCache {
         guard ensureAccess() else { return }
         inflight.insert(entry.id)
         Task { [weak self] in
-            let image = await Self.screenshot(pid: entry.pid, frame: entry.frame, width: self?.targetWidth ?? 600)
+            let image = await Self.screenshot(pid: entry.pid, title: entry.title,
+                                              frame: entry.frame, width: self?.targetWidth ?? 600)
             guard let self else { return }
             inflight.remove(entry.id)
             if let image { store(image, for: entry.id) } else { failed.insert(entry.id) }
@@ -70,13 +71,59 @@ final class WindowPreviewCache {
         }
     }
 
-    /// Matches the accessibility window to its ScreenCaptureKit twin by owner and rect — the two
-    /// APIs share no identifier, and the on-screen rect is the one thing both agree on.
-    private nonisolated static func screenshot(pid: pid_t, frame: CGRect, width: Int) async -> NSImage? {
+    /// Why a given window did or did not get a picture. Written out plainly because the failure
+    /// modes — no shareable window, no rect match, capture refused — look identical from the pane.
+    static func diagnose(_ entries: [WindowEntry]) async -> [[String: Any]] {
+        var report: [[String: Any]] = []
+        let windows: [SCWindow]
         do {
-            let content = try await SCShareableContent.excludingDesktopWindows(true, onScreenWindowsOnly: true)
-            let candidates = content.windows.filter { $0.owningApplication?.processID == pid }
-            guard let window = candidates.first(where: { matches($0.frame, frame) }) ?? candidates.first else { return nil }
+            // onScreenWindowsOnly: false so off-Space windows are in the list at all — whether they
+            // can then be captured is exactly what this is measuring.
+            windows = try await SCShareableContent.excludingDesktopWindows(true, onScreenWindowsOnly: false).windows
+        } catch {
+            return [["error": error.localizedDescription]]
+        }
+        for entry in entries {
+            let mine = windows.filter {
+                $0.owningApplication?.processID == entry.pid && $0.frame.width > 100 && $0.frame.height > 60
+            }
+            let matched = bestMatch(pid: entry.pid, title: entry.title, frame: entry.frame, in: windows)
+            var row: [String: Any] = [
+                "app": entry.appName,
+                "title": entry.shortTitle,
+                "axFrame": "\(Int(entry.frame.minX)),\(Int(entry.frame.minY)) \(Int(entry.frame.width))x\(Int(entry.frame.height))",
+                "scWindowsForPid": mine.count,
+                "scFrames": mine.map { "\(Int($0.frame.minX)),\(Int($0.frame.minY)) \(Int($0.frame.width))x\(Int($0.frame.height))" },
+                "rectMatched": matched != nil,
+                "titles": mine.map { $0.title ?? "-" },
+                "onScreen": mine.map(\.isOnScreen),
+            ]
+            let target = matched ?? mine.first
+            if let target {
+                do {
+                    let configuration = SCStreamConfiguration()
+                    configuration.width = max(1, Int(target.frame.width / 4))
+                    configuration.height = max(1, Int(target.frame.height / 4))
+                    _ = try await SCScreenshotManager.captureImage(
+                        contentFilter: SCContentFilter(desktopIndependentWindow: target), configuration: configuration)
+                    row["capture"] = "ok"
+                } catch {
+                    row["capture"] = error.localizedDescription
+                }
+            } else {
+                row["capture"] = "no shareable window for this pid"
+            }
+            report.append(row)
+        }
+        return report
+    }
+
+    /// Off-screen windows are included on purpose: a window parked on another Space still captures
+    /// fine, and excluding them was the reason most apps showed no preview at all.
+    private nonisolated static func screenshot(pid: pid_t, title: String, frame: CGRect, width: Int) async -> NSImage? {
+        do {
+            let content = try await SCShareableContent.excludingDesktopWindows(true, onScreenWindowsOnly: false)
+            guard let window = bestMatch(pid: pid, title: title, frame: frame, in: content.windows) else { return nil }
             let configuration = SCStreamConfiguration()
             let scale = min(1, Double(width) / max(window.frame.width, 1))
             configuration.width = Int((window.frame.width * scale).rounded())
@@ -92,9 +139,31 @@ final class WindowPreviewCache {
         }
     }
 
-    /// A couple of points of slack: the two APIs round window rects differently.
-    private nonisolated static func matches(_ lhs: CGRect, _ rhs: CGRect) -> Bool {
-        abs(lhs.width - rhs.width) < 3 && abs(lhs.height - rhs.height) < 3
-            && abs(lhs.minX - rhs.minX) < 3 && abs(lhs.minY - rhs.minY) < 3
+    /// Finds a window's ScreenCaptureKit twin. The two APIs share no identifier, and matching on
+    /// position alone breaks across Spaces: accessibility gives a window's place within its own
+    /// Space while the window server lays Spaces out side by side, so one window reads x=0 here and
+    /// x=4235 there. Title survives that, size backs it up, and x only breaks ties — which is
+    /// exactly what is needed for two same-titled windows sitting on one Space.
+    nonisolated static func bestMatch(pid: pid_t, title: String, frame: CGRect, in windows: [SCWindow]) -> SCWindow? {
+        // Chromium apps expose a crowd of tiny untitled helper windows alongside the real one.
+        let candidates = windows.filter {
+            $0.owningApplication?.processID == pid && $0.frame.width > 100 && $0.frame.height > 60
+        }
+        guard candidates.count > 1 else { return candidates.first }
+        return candidates.min { left, right in
+            let leftScore = score(left, title: title, frame: frame)
+            let rightScore = score(right, title: title, frame: frame)
+            if leftScore != rightScore { return leftScore > rightScore }
+            return abs(left.frame.minX - frame.minX) < abs(right.frame.minX - frame.minX)
+        }
     }
+
+    private nonisolated static func score(_ window: SCWindow, title: String, frame: CGRect) -> Int {
+        var total = 0
+        if !title.isEmpty, window.title == title { total += 4 }
+        if abs(window.frame.width - frame.width) < 3, abs(window.frame.height - frame.height) < 3 { total += 2 }
+        if abs(window.frame.minY - frame.minY) < 3 { total += 1 }
+        return total
+    }
+
 }

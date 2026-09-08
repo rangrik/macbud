@@ -100,6 +100,12 @@ enum Automation {
             if let data = try? JSONSerialization.data(withJSONObject: WindowIndex.diagnostics(), options: [.prettyPrinted]) {
                 try? data.write(to: URL(fileURLWithPath: path))
             }
+        case "previews-debug":
+            guard let path = params["path"] else { return }
+            let report = await WindowPreviewCache.diagnose(WindowIndex.windows())
+            if let data = try? JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted]) {
+                try? data.write(to: URL(fileURLWithPath: path))
+            }
         case "raise":
             guard let id = params["id"], let entry = WindowIndex.windows().first(where: { $0.id == id }) else {
                 Log.app.error("raise: no window with id \(params["id"] ?? "")")
