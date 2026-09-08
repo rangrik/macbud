@@ -50,6 +50,7 @@ struct IslandContentView: View {
         case .snippets: SnippetsSectionView(controller: coordinator.snippets)
         case .screenshots: ScreenshotsSectionView(controller: coordinator.screenshots)
         case .dictationHistory: DictationHistorySectionView(controller: coordinator.dictationHistory)
+        case .apps: AppsSectionView(controller: coordinator.apps)
         }
     }
 }

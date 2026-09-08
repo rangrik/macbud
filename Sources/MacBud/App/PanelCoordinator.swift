@@ -17,6 +17,9 @@ final class PanelCoordinator {
     let dictation: DictationController
     let dictationHistoryStore: DictationHistoryStore
     let dictationHistory: DictationHistorySectionController
+    let appIndex: AppIndex
+    let appUsage: AppUsageStore
+    let apps: AppsSectionController
     private(set) var isHoldingToTalk = false
     private(set) var dictationSessionHotKey: HotKey?
     let keepAwake = KeepAwakeController()
@@ -26,13 +29,16 @@ final class PanelCoordinator {
     @ObservationIgnored private var settingsVisibleAtOpen = false
 
     init(state: NotchState, notch: NotchController, settings: AppSettings,
-         clipboardStore: ClipboardStore, snippetStore: SnippetStore, library: ScreenshotLibrary) {
+         clipboardStore: ClipboardStore, snippetStore: SnippetStore, library: ScreenshotLibrary,
+         appIndex: AppIndex = AppIndex(), appUsage: AppUsageStore = AppUsageStore()) {
         self.state = state
         self.notch = notch
         self.settings = settings
         self.clipboardStore = clipboardStore
         self.snippetStore = snippetStore
         self.library = library
+        self.appIndex = appIndex
+        self.appUsage = appUsage
         context = ActionContext(state: state, notch: notch, settings: settings, frontmost: frontmost)
         clipboard = ClipboardSectionController(store: clipboardStore, context: context)
         snippets = SnippetsSectionController(store: snippetStore, clipboard: clipboardStore, context: context)
@@ -40,6 +46,7 @@ final class PanelCoordinator {
         dictationHistoryStore = DictationHistoryStore(dataStore: snippetStore.dataStore)
         dictationHistory = DictationHistorySectionController(store: dictationHistoryStore, context: context, snippets: snippets)
         dictation = DictationController(settings: settings, context: context, clipboard: clipboardStore, history: dictationHistoryStore)
+        apps = AppsSectionController(index: appIndex, usage: appUsage, context: context)
         clipboard.snippets = snippets
         dictation.onDidEnd = { [weak self] in self?.notch.close() }
         dictation.onActivityChanged = { [weak self] active in
@@ -163,6 +170,7 @@ final class PanelCoordinator {
         case .snippets: snippets.queryChanged()
         case .screenshots: screenshots.queryChanged()
         case .dictationHistory: dictationHistory.queryChanged()
+        case .apps: apps.queryChanged()
         }
     }
 
@@ -172,6 +180,7 @@ final class PanelCoordinator {
         case .snippets: snippets.didShow()
         case .screenshots: screenshots.didShow()
         case .dictationHistory: dictationHistory.didShow()
+        case .apps: apps.didShow()
         }
     }
 
@@ -243,6 +252,7 @@ final class PanelCoordinator {
         case .snippets: snippets.handle(command)
         case .screenshots: screenshots.handle(command)
         case .dictationHistory: dictationHistory.handle(command)
+        case .apps: apps.handle(command)
         }
     }
 
@@ -320,6 +330,9 @@ final class PanelCoordinator {
                      hint(.revealInFinder, "Finder"), hint(.delete, "Trash")]
         case .dictationHistory:
             hints = [hint(copy, "Copy", systemImage: "doc.on.doc"), hint(paste, "Insert"), hint(.saveAsSnippet, "Save as snippet"), hint(.delete, "Delete")]
+        case .apps:
+            hints = [hint(.primaryAction, apps.selected?.isRunning == true ? "Switch to app" : "Open app", systemImage: "arrow.up.forward.app"),
+                     Hint(keys: "↑↓←→", label: "Move", command: nil)]
         }
         if !snippets.isEditing { hints.append(hint(.nextSection, "Section")) }
         return hints.filter { $0.command != .saveAsSnippet || settings.isEnabled(.snippets) }
@@ -376,6 +389,13 @@ final class PanelCoordinator {
             d["selectedIndex"] = dictationHistory.selectedIndex
             d["results"] = dictationHistory.results.prefix(20).map(\.text)
             d["selected"] = dictationHistory.selected?.text ?? ""
+        case .apps:
+            let grid = apps.grid
+            d["selectedIndex"] = apps.selectedIndex
+            d["results"] = grid.items.prefix(30).map(\.name)
+            d["selected"] = apps.selected?.name ?? ""
+            d["appGroups"] = grid.groups.map { ["title": $0.title, "items": $0.items.map(\.name)] }
+            d["installedApps"] = appIndex.installed.count
         }
         return d
     }

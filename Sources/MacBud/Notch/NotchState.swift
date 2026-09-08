@@ -1,7 +1,7 @@
 import SwiftUI
 
 nonisolated enum Section: String, CaseIterable, Codable, Identifiable, Sendable {
-    case clipboard, snippets, screenshots, dictationHistory
+    case clipboard, snippets, screenshots, dictationHistory, apps
 
     var id: String { rawValue }
     var title: String {
@@ -10,6 +10,7 @@ nonisolated enum Section: String, CaseIterable, Codable, Identifiable, Sendable 
         case .snippets: "Snippets"
         case .screenshots: "Screenshots"
         case .dictationHistory: "History"
+        case .apps: "Apps"
         }
     }
     var symbol: String {
@@ -18,6 +19,7 @@ nonisolated enum Section: String, CaseIterable, Codable, Identifiable, Sendable 
         case .snippets: "text.badge.checkmark"
         case .screenshots: "photo.on.rectangle.angled"
         case .dictationHistory: "clock"
+        case .apps: "square.grid.2x2"
         }
     }
     var searchPlaceholder: String { self == .dictationHistory ? "Search dictation history…" : "Search \(title.lowercased())…" }
