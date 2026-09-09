@@ -1,6 +1,28 @@
 import AppKit
 import SwiftUI
 
+/// How much of the text view you may edit: everything before the draft the recogniser is still
+/// forming. You can never touch the draft, so its length is fixed — after you type, the settled
+/// part is simply whatever is left. Without this, an edit that changed the length silently cut
+/// characters off the end of the transcript.
+nonisolated struct DictationEditableRegion: Equatable {
+    private(set) var settledLength = 0
+    private(set) var tailLength = 0
+
+    /// Fresh text arrived from the recogniser: relearn where the settled part ends.
+    mutating func reset(settledLength: Int, totalLength: Int) {
+        self.settledLength = max(0, min(settledLength, totalLength))
+        tailLength = max(0, totalLength - self.settledLength)
+    }
+
+    /// You typed: the tail kept its length, so the settled part absorbed the whole change.
+    mutating func textChanged(totalLength: Int) {
+        settledLength = max(0, totalLength - tailLength)
+    }
+
+    func allowsEdit(in range: NSRange) -> Bool { NSMaxRange(range) <= settledLength }
+}
+
 /// The transcript as real, editable text. You can put the cursor anywhere, select across words,
 /// backspace, and type — the things a text field gives you for free and word buttons never could.
 ///
@@ -64,7 +86,7 @@ struct DictationTranscriptEditor: NSViewRepresentable {
         var parent: DictationTranscriptEditor
         weak var textView: EditableTranscriptView?
         /// How much of the text is yours to change. Everything past it is the engine's draft.
-        private(set) var settledLength = 0
+        private(set) var region = DictationEditableRegion()
         private var shown = ""
         private var reportedLines = 0
 
@@ -76,7 +98,10 @@ struct DictationTranscriptEditor: NSViewRepresentable {
             let settled = document.settledText
             let draft = document.draft?.text ?? ""
             let combined = [settled, draft].filter { !$0.isEmpty }.joined(separator: " ")
-            settledLength = (settled as NSString).length
+            defer {
+                region.reset(settledLength: (settled as NSString).length,
+                             totalLength: textView.textStorage?.length ?? 0)
+            }
             guard combined != shown else { return }
             shown = combined
             let selection = textView.selectedRange()
@@ -96,7 +121,7 @@ struct DictationTranscriptEditor: NSViewRepresentable {
         /// The text you can edit, ignoring the draft trailing it.
         var editableText: String {
             guard let storage = textView?.textStorage else { return "" }
-            let length = min(settledLength, storage.length)
+            let length = min(region.settledLength, storage.length)
             return storage.attributedSubstring(from: NSRange(location: 0, length: length)).string
         }
 
@@ -110,13 +135,12 @@ struct DictationTranscriptEditor: NSViewRepresentable {
         /// Refuse edits that reach into the draft the engine still owns.
         func textView(_ textView: NSTextView, shouldChangeTextIn range: NSRange, replacementString: String?) -> Bool {
             parent.onBeginEditing()
-            return NSMaxRange(range) <= settledLength
+            return region.allowsEdit(in: range)
         }
 
         func textDidChange(_ notification: Notification) {
             guard let textView else { return }
-            settledLength += 0
-            settledLength = min(settledLength, textView.textStorage?.length ?? 0)
+            region.textChanged(totalLength: textView.textStorage?.length ?? 0)
             shown = textView.string
             reportLines(width: textView.bounds.width)
         }
