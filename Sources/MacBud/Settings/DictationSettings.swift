@@ -29,6 +29,13 @@ struct DictationSettings: View {
                 Text("Recognition runs entirely on this Mac. The model for a language is downloaded once.")
                     .font(.caption).foregroundStyle(.secondary)
             }
+            SwiftUI.Section("After dictating") {
+                Picker("Offer \"Copy transcript\" for", selection: $settings.dictationCopyPromptSeconds) {
+                    ForEach(AppSettings.copyPromptChoices, id: \.self) { Text("\($0) seconds").tag($0) }
+                }
+                Text("When the text lands in an input it is not added to clipboard history. The notch keeps a Copy transcript button for this long so you can file it yourself. Text that could not be inserted is always copied.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             if let words, !words.rules.isEmpty {
                 SwiftUI.Section("Words you have taught it") {
                     ForEach(words.rules) { rule in

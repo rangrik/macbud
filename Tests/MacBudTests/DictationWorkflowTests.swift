@@ -101,6 +101,24 @@ import Testing
         #expect(persisted?.map(\.text) == ["First transcript"])
     }
 
+    /// The bug: every dictation used to land in clipboard history even when it pasted cleanly.
+    @Test func aTranscriptOnlyEntersClipboardHistoryWhenItMissedTheInput() async {
+        let notch = NotchController()
+        let settings = AppSettings(defaults: UserDefaults(suiteName: UUID().uuidString)!)
+        let context = ActionContext(state: notch.state, notch: notch, settings: settings, frontmost: FrontmostTracker())
+        var kept: [String] = []
+
+        context.insertText = { _, _ in true }
+        await context.deliverDictationNow("It went into the text box", insert: true) { kept.append($0) }
+        #expect(kept.isEmpty)
+        #expect(notch.state.toast?.action == ToastAction(title: "Copy transcript", symbol: "doc.on.doc"))
+
+        context.insertText = { _, _ in false }
+        await context.deliverDictationNow("Nothing was focused", insert: true) { kept.append($0) }
+        #expect(kept == ["Nothing was focused"])
+        #expect(notch.state.toast?.action == nil)
+    }
+
     @Test func historyOpensASnippetDraftWithTheExactTranscript() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }

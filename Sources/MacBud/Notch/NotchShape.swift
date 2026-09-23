@@ -2,7 +2,7 @@ import SwiftUI
 
 /// The island silhouette: flat top flush with the screen edge, concave fillets at the top corners
 /// (so it appears to grow out of the bezel like the real notch), rounded bottom corners.
-struct NotchShape: Shape {
+nonisolated struct NotchShape: Shape {
     var topFillet: CGFloat
     var bottomRadius: CGFloat
 

@@ -92,8 +92,9 @@ struct NotchBaseView: View {
         let toasting = screen.isActive && state.basePhase == .toast
         let tab = controller.showsTab
         let hovered = tab && !toasting && state.tabHovered
+        let toastSize = m.toastSize(withAction: state.toast?.action != nil)
         let size: CGSize = toasting
-            ? CGSize(width: m.toastSize.width + m.topFillet * 2, height: m.toastSize.height)
+            ? CGSize(width: toastSize.width + m.topFillet * 2, height: toastSize.height)
             : (tab ? m.tabSize(for: g, hovered: hovered) : g.notchRect.size)
         ZStack(alignment: .top) {
             IslandSilhouette(topFillet: toasting || tab ? min(m.topFillet, 8) : 0,
@@ -110,17 +111,21 @@ struct NotchBaseView: View {
             }
 
             if let toast = state.toast {
-                ToastContentView(toast: toast)
-                    .frame(width: m.toastSize.width, height: m.toastSize.height - g.notchRect.height)
+                ToastContentView(state: state, toast: toast)
+                    .frame(width: toastSize.width, height: toastSize.height - g.notchRect.height)
                     .padding(.top, g.notchRect.height)
                     .opacity(toasting ? 1 : 0)
                     .animation(toasting ? .easeOut(duration: 0.16).delay(0.08) : .easeIn(duration: 0.1), value: toasting)
             }
         }
         .frame(width: screen.canvasSize.width, height: screen.canvasSize.height, alignment: .top)
+        .coordinateSpace(.named(NotchBaseView.space))
         .preferredColorScheme(.dark)
         .environment(\.colorScheme, .dark)
     }
+
+    /// Toast clicks are hit-tested in AppKit, so the button reports its frame in this space.
+    nonisolated static let space = "notchBase"
 }
 
 /// The wings beside the notch. Hover and click are handled by `ClickableHostingView` in AppKit
@@ -134,21 +139,51 @@ struct NotchTabContent: View {
     var body: some View {
         let hovered = state.tabHovered
         HStack(spacing: 0) {
-            MacBudMark(size: hovered ? 19 : 17)
-                .frame(width: wing, height: height)
+            leftWing(hovered: hovered).frame(width: wing, height: height)
             Spacer().frame(width: notchWidth)
-            Image(systemName: state.keepsAwake ? "sun.max.fill" : (state.notchStatusSymbol ?? "chevron.down"))
-                .font(.system(size: state.notchStatusSymbol == nil ? 9 : 10, weight: .bold))
-                .foregroundStyle(state.keepsAwake ? .orange : (state.notchStatusSymbol == nil ? .white.opacity(hovered ? 0.95 : 0.42) : Theme.warning))
-                .frame(width: wing, height: height)
+            rightWing(hovered: hovered).frame(width: wing, height: height)
         }
         .animation(.easeOut(duration: 0.18), value: hovered)
         .accessibilityLabel(state.keepsAwake ? "MacBud · Keep Awake is on" : "MacBud")
         .accessibilityHint("Click to open MacBud")
     }
+
+    /// With the clock on, the logo moves across to sit beside Keep Awake at the outer edge.
+    @ViewBuilder private func leftWing(hovered: Bool) -> some View {
+        if let clock = state.clockText {
+            Text(clock)
+                .font(.system(size: 12, weight: .medium).monospacedDigit())
+                .foregroundStyle(.white.opacity(hovered ? 1 : 0.78))
+                .accessibilityLabel("Time \(clock)")
+        } else {
+            MacBudMark(size: hovered ? 19 : 17)
+        }
+    }
+
+    @ViewBuilder private func rightWing(hovered: Bool) -> some View {
+        if state.clockText != nil {
+            HStack(spacing: 6) {
+                if let symbol = statusSymbol { statusGlyph(symbol) }
+                MacBudMark(size: hovered ? 19 : 17)
+            }
+        } else {
+            statusGlyph(statusSymbol ?? "chevron.down", idle: statusSymbol == nil, hovered: hovered)
+        }
+    }
+
+    private var statusSymbol: String? {
+        state.keepsAwake ? "sun.max.fill" : state.notchStatusSymbol
+    }
+
+    private func statusGlyph(_ symbol: String, idle: Bool = false, hovered: Bool = false) -> some View {
+        Image(systemName: symbol)
+            .font(.system(size: idle ? 9 : 10, weight: .bold))
+            .foregroundStyle(state.keepsAwake ? .orange : (idle ? .white.opacity(hovered ? 0.95 : 0.42) : Theme.warning))
+    }
 }
 
 struct ToastContentView: View {
+    @Bindable var state: NotchState
     let toast: Toast
 
     var body: some View {
@@ -168,8 +203,34 @@ struct ToastContentView: View {
                         .lineLimit(1)
                 }
             }
+            if let action = toast.action {
+                Spacer(minLength: 10)
+                ToastActionButton(action: action, hovered: state.toastActionHovered)
+                    .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(NotchBaseView.space)) }
+                        action: { state.toastActionRect = $0 }
+            }
         }
         .padding(.horizontal, 18)
-        .frame(maxWidth: .infinity, alignment: .center)
+        .frame(maxWidth: .infinity, alignment: toast.action == nil ? .center : .leading)
+    }
+}
+
+/// Looks like a button but is not one: the base window never becomes key, so
+/// `ClickableHostingView` matches the click against the frame reported above.
+struct ToastActionButton: View {
+    let action: ToastAction
+    let hovered: Bool
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: action.symbol).font(.system(size: 11, weight: .semibold))
+            Text(action.title).font(.system(size: 12, weight: .semibold))
+        }
+        .foregroundStyle(.white.opacity(hovered ? 1 : 0.85))
+        .padding(.horizontal, 14)
+        .frame(height: 26)
+        .background(.white.opacity(hovered ? 0.24 : 0.14), in: .capsule)
+        .animation(.easeOut(duration: 0.12), value: hovered)
+        .accessibilityLabel(action.title)
     }
 }

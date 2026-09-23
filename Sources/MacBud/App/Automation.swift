@@ -41,8 +41,12 @@ enum Automation {
             do { try app.notch.snapshot(window: kind, to: URL(fileURLWithPath: path)) }
             catch { Log.app.error("snapshot failed: \(error)") }
         case "toast":
+            let action = params["action"].map { ToastAction(title: $0, symbol: params["actionSymbol"] ?? "doc.on.doc") }
             app.notch.showToast(Toast(symbol: params["symbol"] ?? "checkmark.circle.fill",
-                                      title: params["title"] ?? "Copied", subtitle: params["subtitle"]))
+                                      title: params["title"] ?? "Copied", subtitle: params["subtitle"], action: action),
+                                duration: .seconds(Int(params["seconds"] ?? "") ?? 1)) {
+                Log.app.info("automation: toast action fired")
+            }
         case "key":
             for token in (params["seq"] ?? "").split(separator: ",").map(String.init) {
                 if token.hasPrefix("wait:"), let ms = Int(token.dropFirst(5)) {

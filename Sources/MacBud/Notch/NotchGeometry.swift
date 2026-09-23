@@ -52,6 +52,8 @@ nonisolated extension NSScreen {
 nonisolated struct NotchMetrics: Equatable, Sendable {
     var islandSize = CGSize(width: 760, height: 500)
     var toastSize = CGSize(width: 300, height: 76)
+    /// Taller toast, for the one that carries a button.
+    var actionToastSize = CGSize(width: 430, height: 84)
     var dictationSize = CGSize(width: 560, height: 238)
     /// The dictation panel grows with what you have said, between these two.
     var dictationMinLines = 4
@@ -65,7 +67,10 @@ nonisolated struct NotchMetrics: Equatable, Sendable {
         let clamped = min(max(lines, dictationMinLines), dictationMaxLines)
         return dictationBaseHeight + CGFloat(clamped - dictationMinLines) * dictationLineHeight
     }
-    var tabExtension: CGFloat = 42
+    var tabExtension: CGFloat = NotchMetrics.plainTabExtension
+    static let plainTabExtension: CGFloat = 42
+    /// The clock needs room either side of it, and so does the logo once Keep Awake joins it.
+    static let clockTabExtension: CGFloat = 58
     var tabHoverGrowth = CGSize(width: 6, height: 4)
     var dictationBottomRadius: CGFloat = 26
     var topFillet: CGFloat = 10
@@ -89,9 +94,12 @@ nonisolated struct NotchMetrics: Equatable, Sendable {
         return CGRect(x: r.minX, y: r.minY - tabHoverGrowth.height, width: r.width, height: r.height + tabHoverGrowth.height)
     }
 
-    func toastWindowFrame(for g: NotchGeometry) -> CGRect {
-        let w = toastSize.width + topFillet * 2
-        return CGRect(x: g.notchCenterX - w / 2, y: g.topY - toastSize.height, width: w, height: toastSize.height)
+    func toastSize(withAction: Bool) -> CGSize { withAction ? actionToastSize : toastSize }
+
+    func toastWindowFrame(for g: NotchGeometry, withAction: Bool = false) -> CGRect {
+        let size = toastSize(withAction: withAction)
+        let w = size.width + topFillet * 2
+        return CGRect(x: g.notchCenterX - w / 2, y: g.topY - size.height, width: w, height: size.height)
     }
 
     func tabSize(for g: NotchGeometry, hovered: Bool) -> CGSize {

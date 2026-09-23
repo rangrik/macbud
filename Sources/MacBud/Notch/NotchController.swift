@@ -13,6 +13,7 @@ final class NotchController {
     private var isInstalled = false
     private var collapseTask: Task<Void, Never>?
     private var toastTask: Task<Void, Never>?
+    private var toastWork: (() -> Void)?
     private var observers: [NSObjectProtocol] = []
     private var isSnapshotting = false
 
@@ -70,8 +71,9 @@ final class NotchController {
         guard screen.host == nil else { return }
         let host = ClickableHostingView(rootView: NotchBaseView(screen: screen, state: state, controller: self))
         host.sizingOptions = []
-        host.onClick = { [weak self] in self?.tabClicked(on: screen) }
+        host.onClick = { [weak self] point in self?.tabClicked(on: screen, at: point) }
         host.onHoverChange = { [weak self] hovering in self?.state.tabHovered = hovering }
+        host.onHoverMove = { [weak self] point in self?.toastHoverMoved(to: point, on: screen) }
         screen.window.contentView = host
         screen.host = host
     }
@@ -128,9 +130,40 @@ final class NotchController {
         if state.isOpen, section == nil || section == state.section { close() } else { open(section: section) }
     }
 
-    private func tabClicked(on screen: ScreenNotch) {
+    private func tabClicked(on screen: ScreenNotch, at point: CGPoint) {
         Trace.log("tab clicked; display=\(screen.displayID) open=\(state.isOpen)")
+        if screen === activeNotch, state.basePhase == .toast, state.toast?.action != nil,
+           state.toastActionRect.contains(point) {
+            performToastAction()
+            return
+        }
         if state.isOpen { close() } else { open(on: screen) }
+    }
+
+    private func toastHoverMoved(to point: CGPoint, on screen: ScreenNotch) {
+        let inside = screen === activeNotch && state.basePhase == .toast && state.toastActionRect.contains(point)
+        guard inside != state.toastActionHovered else { return }
+        state.toastActionHovered = inside
+    }
+
+    private func performToastAction() {
+        let work = toastWork
+        dismissToast()
+        work?()
+    }
+
+    private func dismissToast() {
+        toastTask?.cancel()
+        toastWork = nil
+        state.toastActionRect = .zero
+        state.toastActionHovered = false
+        withAnimation(Self.closeAnimation) { state.basePhase = .idle }
+        toastTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(300))
+            guard !Task.isCancelled, let self, state.basePhase == .idle else { return }
+            state.toast = nil
+            applyBaseFrame()
+        }
     }
 
     /// Grows the dictation panel with what you have said — four lines at rest, ten at most.
@@ -224,16 +257,20 @@ final class NotchController {
         showToast(toast, duration: duration)
     }
 
-    func showToast(_ toast: Toast, duration: Duration = .milliseconds(1400)) {
+    func showToast(_ toast: Toast, duration: Duration = .milliseconds(1400), action: (() -> Void)? = nil) {
         guard !state.isOpen else { return }
         activeNotch.window.orderFrontRegardless()
         toastTask?.cancel()
+        toastWork = action
+        state.toastActionRect = .zero
+        state.toastActionHovered = false
         state.toast = toast
         applyBaseFrame(phase: .toast)
         withAnimation(Self.toastAnimation) { state.basePhase = .toast }
         toastTask = Task { [weak self] in
             try? await Task.sleep(for: duration)
             guard !Task.isCancelled, let self else { return }
+            self.toastWork = nil
             withAnimation(Self.closeAnimation) { self.state.basePhase = .idle }
             try? await Task.sleep(for: .milliseconds(300))
             guard !Task.isCancelled, self.state.basePhase == .idle else { return }
@@ -261,11 +298,11 @@ final class NotchController {
         for screen in screens {
             let p = screen === active ? phase : .idle
             let g = screen.geometry
-            let frame = p == .toast ? state.metrics.toastWindowFrame(for: g)
+            let frame = p == .toast ? state.metrics.toastWindowFrame(for: g, withAction: state.toast?.action != nil)
                                     : state.metrics.collapsedWindowFrame(for: g, tab: showsTab)
             screen.canvasSize = frame.size
             screen.window.setFrame(frame, display: true)
-            screen.window.ignoresMouseEvents = !(showsTab || g.hasPhysicalNotch)
+            screen.window.ignoresMouseEvents = !(showsTab || g.hasPhysicalNotch || p == .toast)
             let grow = p == .idle && showsTab ? state.metrics.tabHoverGrowth : .zero
             screen.host?.hitInsets = NSEdgeInsets(top: 0, left: grow.width, bottom: grow.height, right: grow.width)
         }
@@ -332,8 +369,9 @@ final class NotchBaseWindow: NSWindow {
 /// which is why the tab click did nothing. Taking over hit-testing, clicks and hover here makes the
 /// whole window one reliable button.
 final class ClickableHostingView<Content: View>: NSHostingView<Content> {
-    var onClick: (() -> Void)?
+    var onClick: ((CGPoint) -> Void)?
     var onHoverChange: ((Bool) -> Void)?
+    var onHoverMove: ((CGPoint) -> Void)?
     /// Transparent margin around the drawn tab (top-down semantics); clicks and hover ignore it until hovered.
     var hitInsets = NSEdgeInsets() { didSet { window?.invalidateCursorRects(for: self) } }
     private var pressed = false
@@ -353,6 +391,12 @@ final class ClickableHostingView<Content: View>: NSHostingView<Content> {
 
     private func contains(_ event: NSEvent) -> Bool { activeRect.contains(convert(event.locationInWindow, from: nil)) }
 
+    /// SwiftUI measures from the top-left; AppKit may not. Report in SwiftUI's frame.
+    private func topLeftPoint(_ event: NSEvent) -> CGPoint {
+        let p = convert(event.locationInWindow, from: nil)
+        return isFlipped ? p : CGPoint(x: p.x, y: bounds.height - p.y)
+    }
+
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
     override func hitTest(_ point: NSPoint) -> NSView? { activeRect.contains(convert(point, from: superview)) ? self : nil }
 
@@ -361,12 +405,12 @@ final class ClickableHostingView<Content: View>: NSHostingView<Content> {
     override func mouseUp(with event: NSEvent) {
         defer { pressed = false }
         guard pressed, contains(event) else { return }
-        onClick?()
+        onClick?(topLeftPoint(event))
     }
 
-    override func mouseEntered(with event: NSEvent) { setHovering(contains(event)) }
-    override func mouseMoved(with event: NSEvent) { setHovering(contains(event)) }
-    override func mouseExited(with event: NSEvent) { setHovering(false) }
+    override func mouseEntered(with event: NSEvent) { setHovering(contains(event)); onHoverMove?(topLeftPoint(event)) }
+    override func mouseMoved(with event: NSEvent) { setHovering(contains(event)); onHoverMove?(topLeftPoint(event)) }
+    override func mouseExited(with event: NSEvent) { setHovering(false); onHoverMove?(CGPoint(x: -1, y: -1)) }
 
     private func setHovering(_ now: Bool) {
         guard now != hovering else { return }

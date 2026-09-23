@@ -8,6 +8,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let clipboardStore = ClipboardStore()
     let snippetStore = SnippetStore()
     let library = ScreenshotLibrary()
+    let updates = UpdateChecker()
     private(set) var coordinator: PanelCoordinator!
     private(set) var hotKeys: HotKeyBinder!
     private var monitor: ClipboardMonitor!
@@ -30,6 +31,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         notch.didClose = { [coordinator] in coordinator!.didClose() }
         notch.state.showsNotchTab = settings.showNotchTab
         notch.state.notchStatusSymbol = settings.isEnabled(.clipboard) && settings.clipboardPaused ? "pause.fill" : nil
+        coordinator.clock.onChange = { [weak coordinator, weak notch] in
+            notch?.state.clockText = coordinator?.clockText
+        }
+        coordinator.applyClockSettings()
         coordinator.keepAwake.onChange = { [weak coordinator, weak notch] in
             notch?.state.keepsAwake = coordinator?.keepAwake.isActive ?? false
             if let error = coordinator?.keepAwake.errorMessage { coordinator?.context.showHint(error) }

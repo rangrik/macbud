@@ -32,6 +32,11 @@ final class AppSettings {
     var hasMigratedDictationHistory = false { didSet { set(hasMigratedDictationHistory, "hasMigratedDictationHistory") } }
     /// Locale identifier for dictation; empty means "follow the system language".
     var dictationLocale = "" { didSet { set(dictationLocale, "dictationLocale") } }
+    /// How long the notch keeps offering "Copy transcript" after a dictation lands in an input.
+    var dictationCopyPromptSeconds: Int = 15 {
+        didSet { set(dictationCopyPromptSeconds, "dictationCopyPromptSeconds") }
+    }
+    static let copyPromptChoices = [15, 30, 45, 60]
     var showNotchTab = true { didSet { set(showNotchTab, "showNotchTab") } }
     var hasConfiguredLaunchAtLogin = false { didSet { set(hasConfiguredLaunchAtLogin, "hasConfiguredLaunchAtLogin") } }
     private(set) var sectionOrder: [Section] = Section.allCases {
@@ -69,6 +74,7 @@ final class AppSettings {
         holdToTalkHotKey = defaults.object(forKey: "holdToTalkHotKey") == nil ? .defaultHoldToTalk : codable(HotKey.self, "holdToTalkHotKey")
         hasMigratedDictationHistory = defaults.bool(forKey: "hasMigratedDictationHistory")
         dictationLocale = defaults.string(forKey: "dictationLocale") ?? ""
+        dictationCopyPromptSeconds = min(max(defaults.object(forKey: "dictationCopyPromptSeconds") as? Int ?? 15, 15), 60)
         showNotchTab = defaults.object(forKey: "showNotchTab") as? Bool ?? true
         hasConfiguredLaunchAtLogin = defaults.bool(forKey: "hasConfiguredLaunchAtLogin")
         rememberLastSection = defaults.object(forKey: "rememberLastSection") as? Bool ?? true

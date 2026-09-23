@@ -21,7 +21,7 @@ struct SettingsView: View {
             if app.settings.isEnabled(.dictation) {
                 Tab("Dictation", systemImage: "mic") { DictationSettings(settings: app.settings, words: app.coordinator?.dictationWordStore) }
             }
-            Tab("About", systemImage: "info.circle") { AboutView() }
+            Tab("About", systemImage: "info.circle") { AboutView(updates: app.updates) }
         }
         .frame(width: 640, height: 520)
     }
@@ -368,12 +368,15 @@ struct ScreenshotSettings: View {
 // MARK: - About
 
 struct AboutView: View {
+    var updates: UpdateChecker?
+
     var body: some View {
         VStack(spacing: 14) {
             Image(nsImage: NSApp.applicationIconImage).resizable().frame(width: 96, height: 96)
             Text("MacBud").font(.title.weight(.semibold))
             Text("Version \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?") · macOS 26 · Apple Silicon")
                 .foregroundStyle(.secondary)
+            if let updates { UpdatePanel(updates: updates) }
             Text("Clipboard history, snippets and a screenshot browser — living in the notch, driven by the keyboard.")
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 380)
@@ -389,5 +392,50 @@ struct AboutView: View {
             Link("github.com/rangrik/macbud", destination: URL(string: "https://github.com/rangrik/macbud")!)
         }
         .padding(30)
+    }
+}
+
+
+/// One button: it checks, and once there is something newer the same button installs it.
+struct UpdatePanel: View {
+    @Bindable var updates: UpdateChecker
+
+    var body: some View {
+        VStack(spacing: 6) {
+            switch updates.phase {
+            case .idle, .upToDate, .failed:
+                Button("Check for updates") { updates.check() }
+            case .checking:
+                HStack(spacing: 8) { ProgressView().controlSize(.small); Text("Checking…") }
+            case .available(let release):
+                if updates.canInstallInPlace {
+                    Button("Update to \(release.version)") { updates.install(release) }
+                        .buttonStyle(.borderedProminent)
+                } else {
+                    Link("Download \(release.version)", destination: release.page)
+                }
+            case .downloading(let fraction):
+                ProgressView(value: fraction) { Text("Downloading…") }.frame(width: 220)
+            case .installing:
+                HStack(spacing: 8) { ProgressView().controlSize(.small); Text("Installing — MacBud will restart") }
+            }
+            Text(status).font(.caption).foregroundStyle(statusTint)
+        }
+        .onAppear { if case .idle = updates.phase { updates.check() } }
+    }
+
+    private var status: String {
+        switch updates.phase {
+        case .upToDate: "You are on the latest release."
+        case .failed(let message): message
+        case .available where !updates.canInstallInPlace: "Move MacBud into Applications to update it from here."
+        case .available(let release): release.notes.split(separator: "\n").first.map(String.init) ?? " "
+        default: " "
+        }
+    }
+
+    private var statusTint: Color {
+        if case .failed = updates.phase { return .orange }
+        return .secondary
     }
 }

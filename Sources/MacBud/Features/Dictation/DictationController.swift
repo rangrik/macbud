@@ -69,10 +69,10 @@ final class DictationController {
             return locale
         }, deliver: { text, action in
             if settings.isEnabled(.dictationHistory) { history.add(text) }
-            context.deliverDictation(text, insert: action == .insert)
-            if settings.isEnabled(.clipboard) {
-                clipboard.add(ClipboardItem(id: UUID(), kind: .text, copiedAt: .now, text: text, byteCount: text.utf8.count,
-                                        sourceBundleID: Bundle.main.bundleIdentifier, contentHash: ClipboardItem.hash(ofText: text)))
+            context.deliverDictation(text, insert: action == .insert) { kept in
+                guard settings.isEnabled(.clipboard) else { return }
+                clipboard.add(ClipboardItem(id: UUID(), kind: .text, copiedAt: .now, text: kept, byteCount: kept.utf8.count,
+                                        sourceBundleID: Bundle.main.bundleIdentifier, contentHash: ClipboardItem.hash(ofText: kept)))
             }
         }, words: words)
     }
