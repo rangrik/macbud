@@ -108,6 +108,9 @@ nonisolated final class DictationAudioCapture: @unchecked Sendable {
     private var paused = false
 
     init(inputFormat: AVAudioFormat, targetFormat: AVAudioFormat, recording: DictationRecording) throws {
+        // AnalyzerInput traps on anything else, and a trap inside the audio tap takes the app
+        // with it. Refuse here instead, where the engine can report it.
+        guard targetFormat.commonFormat == .pcmFormatInt16 else { throw CaptureError.unsupportedTargetFormat }
         guard let converter = AVAudioConverter(from: inputFormat, to: targetFormat) else {
             throw CaptureError.conversionFailed
         }
@@ -169,8 +172,13 @@ nonisolated final class DictationAudioCapture: @unchecked Sendable {
     }
 
     enum CaptureError: LocalizedError {
-        case conversionFailed
-        var errorDescription: String? { "The microphone audio could not be converted. Retry the saved recording or choose another microphone." }
+        case conversionFailed, unsupportedTargetFormat
+        var errorDescription: String? {
+            switch self {
+            case .conversionFailed: "The microphone audio could not be converted. Retry the saved recording or choose another microphone."
+            case .unsupportedTargetFormat: "This Mac asked for an audio format dictation cannot produce. Retry the saved recording."
+            }
+        }
     }
 
     /// The converter requests this source synchronously and may request it more than once.
