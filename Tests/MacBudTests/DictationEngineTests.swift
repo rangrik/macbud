@@ -65,17 +65,21 @@ import Testing
 
     @Test func converterCopiesInputAndRetainsTheOriginalForRetry() throws {
         let input = try makeBuffer(sample: 0.25, frames: 4096)
-        let target = try #require(AVAudioFormat(standardFormatWithSampleRate: 16_000, channels: 1))
+        // What SpeechAnalyzer.bestAvailableAudioFormat hands the engine: 16 kHz interleaved Int16.
+        let target = try #require(AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: 16_000, channels: 1, interleaved: true))
         let recording = try DictationRecording(format: input.format)
         defer { recording.discard() }
         let capture = try DictationAudioCapture(inputFormat: input.format, targetFormat: target, recording: recording)
         let output = try #require(try capture.process(input))
-        let firstOutput = try #require(output.input.buffer.floatChannelData?[0][100])
+        // AnalyzerInput.buffer builds a fresh buffer per access, so the samples die with it.
+        let converted = output.input.buffer
+        let firstOutput = try #require(converted.int16ChannelData?[0][100])
+        #expect(firstOutput != 0)
         input.floatChannelData?[0][100] = 0
-        #expect(output.input.buffer.floatChannelData?[0][100] == firstOutput)
+        #expect(converted.int16ChannelData?[0][100] == firstOutput)
         let tail = try capture.finish()
-        #expect(output.input.buffer.frameLength > 0)
-        #expect(output.input.buffer.format.sampleRate == 16_000)
+        #expect(converted.frameLength > 0)
+        #expect(converted.format.sampleRate == 16_000)
         #expect(tail.allSatisfy { $0.buffer.format.sampleRate == 16_000 })
         #expect(try capture.process(input) == nil)
         #expect(try capture.finish().isEmpty)
@@ -83,6 +87,17 @@ import Testing
         let replay = try AVAudioFile(forReading: recording.url)
         #expect(replay.processingFormat.sampleRate == 48_000)
         #expect(replay.length == 4096)
+    }
+
+    /// AnalyzerInput traps on a float buffer, which would kill the app from inside the audio tap.
+    @Test func aTargetFormatTheAnalyzerCannotTakeIsRefusedNotCrashedOn() throws {
+        let input = try makeBuffer(sample: 0.25)
+        let float = try #require(AVAudioFormat(standardFormatWithSampleRate: 16_000, channels: 1))
+        let recording = try DictationRecording(format: input.format)
+        defer { recording.discard() }
+        #expect(throws: DictationAudioCapture.CaptureError.unsupportedTargetFormat) {
+            _ = try DictationAudioCapture(inputFormat: input.format, targetFormat: float, recording: recording)
+        }
     }
 
     @Test func silentFileRetryKeepsTheSameAudioUntilExplicitDiscard() async throws {
