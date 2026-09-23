@@ -111,7 +111,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             _ = settings.clipboardPaused
             _ = settings.disabledFeatures
             _ = settings.sectionOrder
-        } onChange: {
+        } onChange: { [weak self] in
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 applyLibrarySettings()
