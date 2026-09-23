@@ -2,7 +2,7 @@
 
 ![MacBud — Your Mac essentials. Right in the notch.](Resources/Brand/MacBud-Social-Preview.png)
 
-A keyboard-first macOS utility in the MacBook notch: clipboard history, text snippets, screenshots, on-device dictation, and a Keep Alive switch.
+A keyboard-first macOS utility in the MacBook notch: clipboard history, text snippets, screenshots, on-device dictation, a clock, and a Keep Alive switch.
 
 - macOS 26 (Tahoe), Apple Silicon. Swift 6, SwiftUI + AppKit.
 - [Handoff notes](docs/HANDOFF.md)
@@ -12,9 +12,11 @@ A keyboard-first macOS utility in the MacBook notch: clipboard history, text sni
 
 - **Features and tab order:** Settings → Features has checkboxes for Clipboard, Snippets, Screenshots, History, Dictation, and Keep Alive. Use the arrows to reorder section tabs; **⌘1–⌘4** inside the island follow that order, so ⌘1 is always the first tab and a hidden tab closes the gap. Disabled features hide their controls and stop their shortcuts/background work; saved data and shortcut preferences are retained. History and Dictation can be enabled independently.
 - **Every display:** each screen gets its own notch — a real one on the MacBook, a drawn one on external displays. The shortcut opens the island on the display you are working on, chosen by the focused window and falling back to the pointer. Turn the drawn notch off with "Show a clickable notch tab on every display" in Settings.
+- **Clock:** a 24-hour clock sits on the left of the notch tab, visible while the notch is closed, and beside Keep Alive once it is open. Turn it off in Settings → Features. With the clock on, the MacBud logo moves to the right of the notch, after the Keep Alive sun.
 - **Keep Alive:** turn on the switch after the label at the right of the notch to keep the Mac and display awake until you turn it off. Closing the notch leaves it on; quitting MacBud releases it. macOS still controls explicit Sleep and lid closure.
 - **Dictation:** press your configured dictation shortcut (default **⌥⇧D**) to start; press it again to stop and insert. The transcript follows its newest words automatically. **Escape** cancels. Return and Command-Return remain with the active app. You can also click **Insert**, **Copy**, or **Cancel** in the bottom action strip.
 - **Hold to talk:** hold **⌃⌥D**, speak, and release to stop and insert. Both dictation shortcuts are editable in Settings → Shortcuts. If no editable input is focused, the transcript is copied. Dictation never sends Return.
+- **After dictating:** text that lands in an input is *not* added to clipboard history — the notch offers a **Copy transcript** button instead, for 15 seconds by default (up to 60 in Settings → Dictation). Click it to put the transcript in clipboard history yourself. Text that could not be inserted is always copied.
 - **Dictation history:** open the **History** tab (purple dictation icon) to search, copy, insert, delete, or **Save as snippet**. Completed transcripts are stored locally, including older MacBud dictations still in clipboard history. Cancelled recordings are not added.
 - **Retry:** transcribes the saved recording without recording again. Temporary audio stays on this Mac and is removed when delivered or discarded.
 - Insertion requires macOS Accessibility access; otherwise the transcript is copied. Microphone access is requested when starting a live recording. Speech models download once per language.
@@ -28,6 +30,13 @@ make test              # Swift Testing suite
 make install           # build Release, update /Applications/MacBud.app, launch normally
 make package           # build Release, create a versioned ZIP and SHA-256 in dist/
 ```
+
+## Updating
+
+Settings → About has a **Check for updates** button. When a newer release exists the same button
+installs it: MacBud downloads the ZIP, checks it against the release's SHA-256, refuses anything not
+signed by the same identity as the copy you are running, then swaps `/Applications/MacBud.app` and
+relaunches. A MacBud running from somewhere other than Applications links to the release page instead.
 
 ## Releases
 

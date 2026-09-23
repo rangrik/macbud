@@ -1,7 +1,7 @@
 import Foundation
 
 nonisolated enum AppFeature: String, CaseIterable, Sendable {
-    case clipboard, snippets, screenshots, dictationHistory, dictation, keepAwake, apps
+    case clipboard, snippets, screenshots, dictationHistory, dictation, keepAwake, clock, apps
 
     var title: String {
         switch self {
@@ -11,6 +11,7 @@ nonisolated enum AppFeature: String, CaseIterable, Sendable {
         case .dictationHistory: "History"
         case .dictation: "Dictation"
         case .keepAwake: "Keep Alive"
+        case .clock: "Clock"
         case .apps: "Apps"
         }
     }

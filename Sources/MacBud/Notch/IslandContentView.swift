@@ -119,6 +119,12 @@ struct HeaderStatus: View {
 
     var body: some View {
         HStack(spacing: 8) {
+            if let clock = coordinator.clockText {
+                Text(clock)
+                    .font(.system(size: 12, weight: .medium).monospacedDigit())
+                    .foregroundStyle(Theme.textSecondary)
+                    .accessibilityLabel("Time \(clock)")
+            }
             if coordinator.settings.isEnabled(.keepAwake) {
             HStack(spacing: 5) {
                 FeatureBadge(kind: .keepAwake, size: 21)

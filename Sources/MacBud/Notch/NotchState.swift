@@ -31,11 +31,18 @@ nonisolated enum Section: String, CaseIterable, Codable, Identifiable, Sendable 
 nonisolated enum NotchPhase: Equatable, Sendable { case collapsed, expanded, dictation }
 nonisolated enum BasePhase: Equatable, Sendable { case idle, toast }
 
+/// A button the toast offers. The work it does lives on NotchController.
+struct ToastAction: Equatable, Sendable {
+    var title: String
+    var symbol: String
+}
+
 struct Toast: Equatable, Sendable {
     var symbol: String
     var title: String
     var subtitle: String? = nil
     var tint: Color = .green
+    var action: ToastAction? = nil
 }
 
 /// Everything the island's views observe. Owned by `NotchController`.
@@ -59,7 +66,11 @@ final class NotchState {
     /// Small status glyph shown in the idle tab (e.g. "pause.fill" while capture is paused).
     var notchStatusSymbol: String?
     var keepsAwake = false
+    var clockText: String?
     var tabHovered = false
+    /// Where the toast button sits, in the collapsed window's own coordinates, so clicks can find it.
+    var toastActionRect: CGRect = .zero
+    var toastActionHovered = false
     /// Measured width of the status area, so the tab strip knows what the right band has left.
     var headerStatusWidth: CGFloat = 0
 

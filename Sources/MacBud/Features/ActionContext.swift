@@ -9,6 +9,10 @@ final class ActionContext {
     let frontmost: FrontmostTracker
     let paster = Paster.shared
     private var hintTask: Task<Void, Never>?
+    /// Reaching a real input needs Accessibility and focus, so tests replace this.
+    var insertText: (String, String?) async -> Bool = { text, bundleID in
+        await Paster.shared.insertIntoFocusedInput(text, expectedBundleID: bundleID)
+    }
 
     init(state: NotchState, notch: NotchController, settings: AppSettings, frontmost: FrontmostTracker) {
         self.state = state
@@ -27,15 +31,32 @@ final class ActionContext {
     }
 
     /// Copies first, then inserts into the currently focused input when one is available.
-    func deliverDictation(_ text: String, insert: Bool, expectedBundleID: String? = nil) {
+    func deliverDictation(_ text: String, insert: Bool, expectedBundleID: String? = nil,
+                          keep: @escaping (String) -> Void = { _ in }) {
+        Task { await deliverDictationNow(text, insert: insert, expectedBundleID: expectedBundleID, keep: keep) }
+    }
+
+    /// `keep` files the transcript in clipboard history. It runs only when the text missed the input,
+    /// or when the toast button is clicked — otherwise dictating would fill the history up.
+    func deliverDictationNow(_ text: String, insert: Bool, expectedBundleID: String? = nil,
+                             keep: @escaping (String) -> Void = { _ in }) async {
         paster.write(text: text)
         notch.close()
-        Task {
-            let inserted = insert ? await paster.insertIntoFocusedInput(text, expectedBundleID: expectedBundleID) : false
-            guard settings.showToasts else { return }
-            notch.showToast(Toast(symbol: inserted ? "checkmark.circle.fill" : "doc.on.clipboard",
-                                  title: inserted ? "Inserted" : "Copied",
-                                  subtitle: inserted || !insert ? String(text.prefix(48)) : "No editable input available · ready to paste"))
+        let inserted = insert ? await insertText(text, expectedBundleID) : false
+        if !inserted { keep(text) }
+        guard settings.showToasts else { return }
+        guard inserted else {
+            notch.showToast(Toast(symbol: "doc.on.clipboard", title: "Copied",
+                                  subtitle: insert ? "No editable input available · ready to paste" : String(text.prefix(48))))
+            return
+        }
+        notch.showToast(Toast(symbol: "checkmark.circle.fill", title: "Inserted", subtitle: String(text.prefix(48)),
+                              action: ToastAction(title: "Copy transcript", symbol: "doc.on.doc")),
+                        duration: .seconds(settings.dictationCopyPromptSeconds)) {
+            self.paster.write(text: text)
+            keep(text)
+            guard self.settings.showToasts else { return }
+            self.notch.showToast(Toast(symbol: "doc.on.clipboard", title: "Copied", subtitle: String(text.prefix(48))))
         }
     }
 

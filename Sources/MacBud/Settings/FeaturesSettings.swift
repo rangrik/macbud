@@ -29,6 +29,7 @@ struct FeaturesSettings: View {
             SwiftUI.Section("Tools") {
                 Toggle("Dictation", isOn: enabled(.dictation)).toggleStyle(.checkbox)
                 Toggle("Keep Alive", isOn: enabled(.keepAwake)).toggleStyle(.checkbox)
+                Toggle("Clock", isOn: enabled(.clock)).toggleStyle(.checkbox)
             }
             SwiftUI.Section {
                 Text("Disabled features stop their background work and shortcuts. History can stay available with Dictation off; turning History off stops saving new dictations.")

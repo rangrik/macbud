@@ -24,6 +24,7 @@ final class PanelCoordinator {
     private(set) var isHoldingToTalk = false
     private(set) var dictationSessionHotKey: HotKey?
     let keepAwake = KeepAwakeController()
+    let clock = ClockController()
     /// Set by the app once hotkeys are bound; used by the welcome screen and footer.
     var hotKeys: HotKeyBinder?
     /// Whether Settings was already showing when the island opened (see `didClose`).
@@ -63,9 +64,20 @@ final class PanelCoordinator {
     var showsWelcome: Bool { !settings.hasSeenWelcome }
     var hasEnabledSection: Bool { settings.isEnabled(state.section.feature) }
 
+    /// The time to show, or nil when the Clock feature is off.
+    var clockText: String? { settings.isEnabled(.clock) ? clock.text : nil }
+
+    func applyClockSettings() {
+        let on = settings.isEnabled(.clock)
+        clock.setEnabled(on)
+        state.clockText = clockText
+        state.metrics.tabExtension = on ? NotchMetrics.clockTabExtension : NotchMetrics.plainTabExtension
+    }
+
     func applyFeatureSettings() {
         if !settings.isEnabled(.dictation), dictation.isActive { dictation.cancel() }
         if !settings.isEnabled(.keepAwake), keepAwake.isActive { keepAwake.stop() }
+        applyClockSettings()
         if !settings.isEnabled(.snippets), snippets.isEditing { snippets.cancelEditing() }
         if !hasEnabledSection {
             if let first = settings.enabledSections.first { state.section = first; settings.lastSection = first }
