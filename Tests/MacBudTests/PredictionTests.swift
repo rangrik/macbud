@@ -14,12 +14,14 @@ import Testing
                              createdAt: now - 20, byteCount: 1, folder: URL(fileURLWithPath: "/Users/owner/Private"))
         let context = PredictionContext.capture(clipboard: clips, media: [shot], dictations: [DictationHistoryItem(text: "my pin is 4321")],
                                                 app: "com.apple.Safari", enabled: Section.allCases, now: now)
-        let miss = SessionRecord(t: now, context: context, heuristic: .screenshots, opened: .screenshots, source: "heuristic",
-                                 actual: .clipboard, hit: false)
+        let rule = LandingIntent(kind: .screenshot, hint: .newest)
+        let miss = SessionRecord(t: now, context: context, heuristic: rule, landed: rule, source: "heuristic", opened: .screenshots,
+                                 outcome: Outcome(kind: .text, newest: true), hit: false)
         for prompt in [PredictionPrompts.driver(context: context, strategies: "", recent: [miss]),
                        PredictionPrompts.reviewer(strategies: "", misses: [miss], hits: [], rates: "")] {
             for secret in ["hunter2", "Private", "Plan.pdf", "secret", "4321"] { #expect(!prompt.contains(secret)) }
             #expect(prompt.contains("com.tinyspeck.slackmacgap") && prompt.contains(#""screenshotAge":20"#))
+            #expect(!prompt.contains("dictationHistory") && !prompt.contains("section"), "Prompts must not name today's tabs")
         }
     }
 
@@ -36,7 +38,7 @@ import Testing
     /// Seam: `codex exec --json` output → reply, tokens and cached pick. Catches lost tokens, hidden errors and hidden tabs.
     @Test func codexOutputIsParsedAndChecked() async throws {
         let ok = #"""
-        {"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"{\"section\":\"snippets\",\"confidence\":0.8,\"note\":\"n\"}"}}
+        {"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"{\"kind\":\"snippet\",\"hint\":\"any\",\"confidence\":0.8,\"note\":\"n\"}"}}
         {"type":"turn.completed","usage":{"input_tokens":8946,"cached_input_tokens":0,"output_tokens":34,"reasoning_output_tokens":0}}
         """#
         let reply = try CodexRunner.parse(Data(ok.utf8), stderr: Data())
@@ -59,14 +61,14 @@ import Testing
     /// Seam: recorded misses → reviewer → strategies file → next driver prompt.
     /// Catches a reviewer that never fires, a strategies file that is not written, or a driver that never reads it.
     @Test func missesPastTheThresholdRewriteWhatTheDriverReads() async throws {
-        let runner = FakeRunner(["driver": .success(#"{"section":"clipboard","confidence":0.5,"note":"n"}"#),
+        let runner = FakeRunner(["driver": .success(#"{"kind":"text","hint":"any","confidence":0.5,"note":"n"}"#),
                                  "reviewer": .success(#"{"strategies":"- In Xcode, open Snippets.","summary":"s"}"#)])
         let context = context()
         let (predictor, settings) = makePredictor(runner, context)
         settings.prediction.missThreshold = 2
         for _ in 0..<2 {
             #expect(predictor.sectionForOpen() == .clipboard)
-            predictor.noteAction("copy", in: .snippets)
+            predictor.noteAction("copy", outcome: Outcome(kind: .snippet), in: .snippets)
             predictor.sessionEnded()
         }
         for _ in 0..<200 where predictor.lastReview == nil { try await Task.sleep(for: .milliseconds(10)) }
@@ -77,7 +79,8 @@ import Testing
     }
 
     private func context(screenshotAge: Int? = nil, enabled: [Section] = Section.allCases) -> PredictionContext {
-        PredictionContext(hour: 10, weekday: "Thu", app: "com.apple.dt.Xcode", screenshotAge: screenshotAge, enabled: enabled)
+        PredictionContext(hour: 10, weekday: "Thu", app: "com.apple.dt.Xcode", screenshotAge: screenshotAge,
+                          kinds: IntentKind.available(in: enabled))
     }
 
     private func makePredictor(_ runner: FakeRunner, _ context: PredictionContext) -> (SectionPredictor, AppSettings) {
@@ -88,14 +91,12 @@ import Testing
 }
 
 private actor FakeRunner: ModelRunner {
-    nonisolated let home = "test"
     let replies: [String: Result<String, ModelError>]
     var prompts: [String: String] = [:]
 
     init(_ replies: [String: Result<String, ModelError>]) { self.replies = replies }
 
-    func blocker() async -> RunnerBlock? { nil }
-    func codexPath() async -> String? { nil }
+    func codexPath() async -> String? { "/fake/codex" }
     func run(_ call: ModelCall) async throws -> ModelReply {
         prompts[call.purpose] = call.prompt
         return ModelReply(text: try (replies[call.purpose] ?? .failure(ModelError(message: "no reply"))).get(), tokens: TokenUsage(input: 10))

@@ -89,6 +89,7 @@ final class ClipboardSectionController {
     }
 
     func activate(_ item: ClipboardItem, paste: Bool) {
+        context.onUse?(paste ? "paste" : "copy", .clip(item, among: store.items))
         let paster = context.paster
         context.perform(paste: paste, description: item.title) {
             switch item.kind {

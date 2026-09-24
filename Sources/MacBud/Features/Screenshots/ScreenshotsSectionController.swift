@@ -63,6 +63,7 @@ final class ScreenshotsSectionController {
     }
 
     func activate(_ item: MediaItem, paste: Bool) {
+        context.onUse?(paste ? "paste" : "copy", .screenshot(item, among: library.items))
         let paster = context.paster
         context.perform(paste: paste, description: item.filename) {
             paster.write(mediaFile: item.url, kind: item.kind)

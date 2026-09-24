@@ -4,7 +4,7 @@ import Foundation
 /// Opening only reads a cache; every model call runs in the background.
 @Observable
 final class SectionPredictor {
-    enum Status: Equatable { case waiting, ready, off, blocked(RunnerBlock), capReached, failed(String) }
+    enum Status: Equatable { case waiting, ready, off, missingCLI, capReached, failed(String) }
 
     struct Rate {
         var hits = 0, total = 0
@@ -24,7 +24,6 @@ final class SectionPredictor {
     private(set) var codexPath: String?
     @ObservationIgnored private var cache: [String: ModelPick] = [:]
     @ObservationIgnored private var open: SessionRecord?
-    @ObservationIgnored private var visited: Section?
     @ObservationIgnored private var lastKey = ""
     @ObservationIgnored private var nextCall = Date.distantPast
     @ObservationIgnored private var nextReview = Date.distantPast
@@ -43,8 +42,8 @@ final class SectionPredictor {
         let saved = await memory.text("strategies.md")
         strategies = saved?.text ?? ""
         lastReview = saved?.modified
-        if let block = await runner.blocker() { status = .blocked(block) }
         codexPath = await runner.codexPath()
+        if codexPath == nil { status = .missingCLI }
         let timer = Timer(timeInterval: 5, repeats: true) { [weak self] _ in MainActor.assumeIsolated { self?.tick() } }
         timer.tolerance = 1
         RunLoop.main.add(timer, forMode: .common)
@@ -71,25 +70,24 @@ final class SectionPredictor {
 
     // MARK: Opening and outcome
 
-    /// The section a plain open lands on: a fresh model pick for this context, else the heuristic.
+    /// Where a plain open lands: a fresh model intent for this context, else the heuristic's, as today's tab.
     func sectionForOpen() -> Section? {
         let started = ContinuousClock.now
         let context = capture()
-        let model = fresh(cache[context.key]).flatMap { context.enabled.contains($0.section) ? $0 : nil }
-        guard let opened = model?.section ?? context.heuristic else { return nil }
+        let model = fresh(cache[context.key]).flatMap { context.kinds.contains($0.intent.kind) ? $0 : nil }
+        guard let landed = model?.intent ?? context.heuristic else { return nil }
         let source = model == nil ? "heuristic" : "model"
-        open = SessionRecord(t: .now, context: context, heuristic: context.heuristic, model: model, opened: opened, source: source)
-        visited = nil
-        Trace.log("predict open=\(opened.rawValue) source=\(source) heuristic=\(context.heuristic?.rawValue ?? "-") took=\(ContinuousClock.now - started)")
-        return opened
+        open = SessionRecord(t: .now, context: context, heuristic: context.heuristic, model: model, landed: landed, source: source,
+                             opened: landed.kind.section)
+        Trace.log("predict open=\(landed.kind.section.rawValue) intent=\(PredictionPrompts.describe(landed)) source=\(source) took=\(ContinuousClock.now - started)")
+        return landed.kind.section
     }
 
-    func noteVisit(_ section: Section) { visited = section }
-
-    /// The first action decides where the owner really wanted to be.
-    func noteAction(_ action: String, in section: Section) {
-        guard let started = open?.t, open?.actual == nil else { return }
-        open?.actual = section
+    /// The first thing the owner uses decides what they really wanted.
+    func noteAction(_ action: String, outcome: Outcome, in section: Section) {
+        guard let started = open?.t, open?.outcome == nil else { return }
+        open?.outcome = outcome
+        open?.actedIn = section
         open?.action = action
         open?.secs = (Date.now.timeIntervalSince(started) * 10).rounded() / 10
     }
@@ -97,12 +95,11 @@ final class SectionPredictor {
     func sessionEnded() {
         guard var record = open else { return }
         open = nil
-        record.actual = record.actual ?? visited
-        record.hit = record.actual.map { $0 == record.opened }
+        record.hit = record.outcome.map(record.landed.matches)
         sessions.append(record)
         if sessions.count > 500 { sessions.removeFirst(sessions.count - 500) }
         Task { await memory.appendLine(record, to: "predictions.jsonl") }
-        Trace.log("predict session opened=\(record.opened.rawValue) actual=\(record.actual?.rawValue ?? "-") hit=\(record.hit.map { "\($0)" } ?? "-")")
+        Trace.log("predict session landed=\(PredictionPrompts.describe(record.landed)) used=\(record.outcome.map { "\($0.kind.rawValue) newest=\($0.newest.map { "\($0)" } ?? "-")" } ?? "-") hit=\(record.hit.map { "\($0)" } ?? "-")")
         if record.hit == false { reviewIfDue() }
     }
 
@@ -116,12 +113,12 @@ final class SectionPredictor {
         let prompt = PredictionPrompts.driver(context: context, strategies: strategies,
                                               recent: Array(sessions.filter { $0.hit != nil }.suffix(15)))
         let reply = await call(ModelCall(purpose: "driver", model: config.driverModel, effort: config.driverEffort, prompt: prompt,
-                                         schema: PredictionPrompts.driverSchema(context.enabled), timeout: .seconds(30))) {
-            DriverReply.parse($0, enabled: context.enabled)
+                                         schema: PredictionPrompts.driverSchema(context.kinds), timeout: .seconds(30))) {
+            DriverReply.parse($0, kinds: context.kinds)
         }
         nextCall = .now + (reply == nil ? 300 : 20)
         guard let reply else { return }
-        cache[context.key] = ModelPick(section: reply.section, confidence: min(max(reply.confidence, 0), 1),
+        cache[context.key] = ModelPick(intent: LandingIntent(kind: reply.kind, hint: reply.hint, confidence: min(max(reply.confidence, 0), 1)),
                                        note: String(reply.note.prefix(300)), key: context.key, madeAt: .now)
         if cache.count > 20, let oldest = cache.min(by: { $0.value.madeAt < $1.value.madeAt })?.key { cache[oldest] = nil }
     }
@@ -152,12 +149,13 @@ final class SectionPredictor {
         await memory.writeText(reply.strategies + "\n", to: "strategies.md")
     }
 
-    /// One call at a time, behind the kill switch, the daily cap and a signed-in CLI. Claims the slot when true.
+    /// One call at a time, behind the kill switch, the daily cap and a found CLI. Claims the slot when true.
     private func mayCall(after time: Date) async -> Bool {
         guard settings.prediction.useModel else { status = .off; return false }
         guard !isBusy, Date.now >= time else { return false }
         guard callsToday < settings.prediction.dailyCallCap else { status = .capReached; return false }
-        if let block = await runner.blocker() { status = .blocked(block); return false }
+        codexPath = await runner.codexPath()
+        guard codexPath != nil else { status = .missingCLI; return false }
         guard !isBusy else { return false }
         isBusy = true
         return true
@@ -166,7 +164,7 @@ final class SectionPredictor {
     /// Every call lands in the ledger, whatever happens, so the owner can read what was sent and received.
     private func call<T>(_ call: ModelCall, parse: (String) -> T?) async -> T? {
         let started = Date.now
-        var record = CallRecord(t: started, purpose: call.purpose, model: call.model, effort: call.effort, home: runner.home, prompt: call.prompt)
+        var record = CallRecord(t: started, purpose: call.purpose, model: call.model, effort: call.effort, prompt: call.prompt)
         var result: T?
         do {
             let reply = try await runner.run(call)
@@ -195,11 +193,11 @@ final class SectionPredictor {
     var rates: (model: Rate, heuristic: Rate, heuristicWhereModel: Rate) {
         var model = Rate(), heuristic = Rate(), same = Rate()
         for s in sessions where s.t > .now - 7 * 86_400 {
-            guard let actual = s.actual else { continue }
-            let heuristicHit = s.heuristic == actual ? 1 : 0
+            guard let outcome = s.outcome else { continue }
+            let heuristicHit = s.heuristic?.matches(outcome) == true ? 1 : 0
             heuristic.total += 1; heuristic.hits += heuristicHit
-            guard let pick = s.model?.section else { continue }
-            model.total += 1; model.hits += pick == actual ? 1 : 0
+            guard let pick = s.model?.intent else { continue }
+            model.total += 1; model.hits += pick.matches(outcome) ? 1 : 0
             same.total += 1; same.hits += heuristicHit
         }
         return (model, heuristic, same)
@@ -215,13 +213,11 @@ final class SectionPredictor {
     }
 
     func dump() -> [String: Any] {
-        let last = sessions.last
+        let last = sessions.last.flatMap { try? JSONSerialization.jsonObject(with: JSONEncoder().encode($0)) }
         return ["status": String(describing: status), "busy": isBusy, "cached": cache.count, "key": capture().key,
                 "sessions": sessions.count, "unreviewedMisses": unreviewedMisses.count, "callsToday": callsToday,
                 "strategyLines": strategies.split(separator: "\n").count, "lastReview": lastReview?.ISO8601Format() ?? "",
-                "last": ["opened": last?.opened.rawValue ?? "", "source": last?.source ?? "", "heuristic": last?.heuristic?.rawValue ?? "",
-                         "model": last?.model?.section.rawValue ?? "", "actual": last?.actual?.rawValue ?? "",
-                         "hit": last?.hit.map { $0 ? "hit" : "miss" } ?? "none"]]
+                "last": last ?? [:]]
     }
 }
 

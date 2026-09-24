@@ -59,9 +59,9 @@ final class PanelCoordinator {
                                       app: NSWorkspace.shared.frontmostApplication?.bundleIdentifier, enabled: settings.enabledSections)
         }
         clipboard.snippets = snippets
-        context.onAct = { [weak self] action in
+        context.onUse = { [weak self] action, outcome in
             guard let self else { return }
-            predictor.noteAction(action, in: state.section)
+            predictor.noteAction(action, outcome: outcome, in: state.section)
         }
         dictation.onDidEnd = { [weak self] in self?.notch.close() }
         dictation.onActivityChanged = { [weak self] active in
@@ -190,7 +190,6 @@ final class PanelCoordinator {
         if snippets.isEditing { snippets.cancelEditing() }
         state.section = section
         settings.lastSection = section
-        predictor.noteVisit(section)
         state.query = ""
         state.wantsSearchFocus = true
         context.clearHint()
@@ -279,6 +278,17 @@ final class PanelCoordinator {
         }
     }
 
+    /// The selected item in prediction terms, for keyboard actions that do not go through a use path.
+    private var selectedOutcome: Outcome? {
+        switch state.section {
+        case .clipboard: clipboard.selected.map { .clip($0, among: clipboardStore.items) }
+        case .snippets: snippets.selected.map { _ in Outcome(kind: .snippet) }
+        case .screenshots: screenshots.selected.map { .screenshot($0, among: library.items) }
+        case .dictationHistory: dictationHistory.selected.map { .dictation($0, among: dictationHistoryStore.items) }
+        case .apps: apps.selected.map { .app($0, switchTarget: apps.switchTarget) }
+        }
+    }
+
     private func activeHandle(_ command: PanelCommand) -> Bool {
         guard hasEnabledSection else { return false }
         if command == .saveAsSnippet, !settings.isEnabled(.snippets) { return false }
@@ -286,7 +296,7 @@ final class PanelCoordinator {
         case .primaryAction, .secondaryAction, .delete, .clearAll, .togglePin, .saveAsSnippet, .newItem, .editItem,
              .revealInFinder, .quickLook:
             // Before the section acts: acting may close the island, which ends the session.
-            predictor.noteAction(String(describing: command), in: state.section)
+            if let outcome = selectedOutcome { predictor.noteAction(String(describing: command), outcome: outcome, in: state.section) }
         default: break
         }
         return switch state.section {

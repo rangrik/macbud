@@ -11,7 +11,8 @@ nonisolated struct PredictionContext: Codable, Equatable, Sendable {
     var screenshotKind: String?
     var screenshotAge: Int?
     var dictationAge: Int?
-    var enabled: [Section]
+    /// Kinds the owner can reach now; hidden features drop out.
+    var kinds: [IntentKind]
 
     static func capture(clipboard: [ClipboardItem], media: [MediaItem], dictations: [DictationHistoryItem],
                         app: String?, enabled: [Section], now: Date = .now) -> PredictionContext {
@@ -24,7 +25,8 @@ nonisolated struct PredictionContext: Codable, Equatable, Sendable {
                                  weekday: calendar.shortWeekdaySymbols[calendar.component(.weekday, from: now) - 1],
                                  app: app, clipboardKind: clip?.kind.rawValue, clipboardSource: clip?.sourceBundleID,
                                  clipboardAge: age(clip?.copiedAt), screenshotKind: shot?.kind.rawValue,
-                                 screenshotAge: age(shot?.createdAt), dictationAge: age(dictated), enabled: enabled)
+                                 screenshotAge: age(shot?.createdAt), dictationAge: age(dictated),
+                                 kinds: IntentKind.available(in: enabled))
     }
 
     /// Coarse on purpose, so a pick stays usable until something that matters changes.
@@ -34,37 +36,39 @@ nonisolated struct PredictionContext: Codable, Equatable, Sendable {
         return [app ?? "-", String(hour), flags, clipboardKind ?? "-"].joined(separator: "|")
     }
 
-    /// The pick that needs no model: a fresh screenshot or dictation, else Clipboard, else the first tab.
-    var heuristic: Section? {
-        let fresh = [(screenshotAge, Section.screenshots), (dictationAge, .dictationHistory)]
-            .compactMap { age, section in age.map { (age: $0, section: section) } }
-            .filter { $0.age < 60 && enabled.contains($0.section) }
-        if let newest = fresh.min(by: { $0.age < $1.age }) { return newest.section }
-        return enabled.contains(.clipboard) ? .clipboard : enabled.first
+    /// The pick that needs no model: a screenshot or dictation from the last minute, else text.
+    var heuristic: LandingIntent? {
+        let fresh = [(screenshotAge, IntentKind.screenshot), (dictationAge, .dictation)]
+            .compactMap { age, kind in age.map { (age: $0, kind: kind) } }
+            .filter { $0.age < 60 && kinds.contains($0.kind) }
+        if let newest = fresh.min(by: { $0.age < $1.age }) { return LandingIntent(kind: newest.kind, hint: .newest) }
+        return (kinds.contains(.text) ? .text : kinds.first).map { LandingIntent(kind: $0) }
     }
 }
 
 /// The driver's cached answer for one context key.
 nonisolated struct ModelPick: Codable, Equatable, Sendable {
-    var section: Section
-    var confidence: Double
+    var intent: LandingIntent
     var note: String
     var key: String
     var madeAt: Date
 }
 
-/// One plain open of the island: what we chose, and where the owner ended up.
+/// One plain open of the island: what we predicted, and what the owner used.
 nonisolated struct SessionRecord: Codable, Identifiable, Sendable {
     var t: Date
     var context: PredictionContext
-    var heuristic: Section?
+    var heuristic: LandingIntent?
     var model: ModelPick?
-    var opened: Section
+    var landed: LandingIntent
     var source: String
-    var actual: Section?
+    /// Today's tab for `landed`, and the tab the owner acted in. The shelf will not need these.
+    var opened: Section
+    var actedIn: Section?
+    var outcome: Outcome?
     var action: String?
     var secs: Double?
-    /// Nil when the owner neither acted nor switched, so there is nothing to score.
+    /// Nil when the owner used nothing, so there is nothing to score.
     var hit: Bool?
     var id: Date { t }
 }
@@ -79,7 +83,6 @@ nonisolated struct CallRecord: Codable, Identifiable, Sendable {
     var purpose: String
     var model: String
     var effort: String
-    var home: String
     var ms = 0
     var status = "ok"
     var error: String?

@@ -21,6 +21,8 @@ struct PredictionSettings: View {
                 modelRow("Driver (predicts)", model: $settings.prediction.driverModel, effort: $settings.prediction.driverEffort)
                 modelRow("Reviewer (learns)", model: $settings.prediction.reviewerModel, effort: $settings.prediction.reviewerEffort)
                 LabeledContent("Codex CLI", value: predictor.codexPath ?? "Not found yet")
+                Text("Runs on your Codex login with nothing saved to your Codex history; MacBud keeps its own ledger below.")
+                    .font(.caption).foregroundStyle(.secondary)
                 Stepper("Review after \(settings.prediction.missThreshold) misses", value: $settings.prediction.missThreshold, in: 1...50)
                 Stepper("Or every \(settings.prediction.reviewHours) hours when a miss is waiting", value: $settings.prediction.reviewHours, in: 1...48)
                 Stepper("At most \(settings.prediction.dailyCallCap) calls a day", value: $settings.prediction.dailyCallCap, in: 10...300, step: 10)
@@ -76,17 +78,11 @@ struct PredictionSettings: View {
         }
     }
 
-    @ViewBuilder private var status: some View {
+    private var status: some View {
         let (ok, text) = statusText
-        HStack(alignment: .firstTextBaseline) {
+        return HStack(alignment: .firstTextBaseline) {
             StatusDot(ok: ok)
             Text(text)
-        }
-        if settings.prediction.useModel, predictor.status == .blocked(.notSignedIn) {
-            HStack {
-                Text(CodexRunner.signInCommand).font(.system(size: 11, design: .monospaced)).textSelection(.enabled)
-                Button("Copy") { Paster.shared.write(text: CodexRunner.signInCommand) }
-            }
         }
     }
 
@@ -97,8 +93,7 @@ struct PredictionSettings: View {
         case .waiting: (true, "Waiting for the first call.")
         case .ready: (true, "Ready. Rules cover any moment without a fresh pick.")
         case .off: (false, "Codex is off: rules pick the section.")
-        case .blocked(.missingCLI): (false, "Codex CLI not found in your login shell: rules only.")
-        case .blocked(.notSignedIn): (false, "MacBud's own Codex home is not signed in: rules only. Run this once in Terminal:")
+        case .missingCLI: (false, "Codex CLI not found in your login shell: rules only.")
         case .capReached: (false, "Daily cap of \(settings.prediction.dailyCallCap) calls reached: rules only until tomorrow.")
         case .failed(let message): (false, "Last call failed: \(message). Rules until it works.")
         }
@@ -121,14 +116,16 @@ struct PredictionSettings: View {
             .sorted { $0.model < $1.model }
     }
 
+    private func describe(_ intent: LandingIntent) -> String { PredictionPrompts.describe(intent) }
+
     private func sessionRow(_ s: SessionRecord) -> some View {
         HStack(alignment: .firstTextBaseline) {
             Image(systemName: s.hit == true ? "checkmark.circle.fill" : s.hit == false ? "xmark.circle.fill" : "circle.dashed")
                 .foregroundStyle(s.hit == true ? .green : s.hit == false ? .orange : .secondary)
             VStack(alignment: .leading, spacing: 2) {
-                Text("\(s.t.formatted(date: .omitted, time: .shortened)) · opened \(s.opened.title) by \(s.source == "model" ? "model" : "rules") · "
-                     + (s.actual.map { "went to \($0.title)" } ?? "no action"))
-                Text("app \(s.context.app ?? "–") · rules said \(s.heuristic?.title ?? "–") · model said \(s.model?.section.title ?? "–")"
+                Text("\(s.t.formatted(date: .omitted, time: .shortened)) · opened \(s.opened.title) for \(describe(s.landed)) by \(s.source == "model" ? "model" : "rules") · "
+                     + (s.outcome.map { "used \($0.kind.rawValue)" + ($0.newest.map { $0 ? " (newest)" : " (older)" } ?? "") } ?? "used nothing"))
+                Text("app \(s.context.app ?? "–") · rules said \(s.heuristic.map(describe) ?? "–") · model said \(s.model.map { describe($0.intent) } ?? "–")"
                      + (s.model.map { ": \($0.note)" } ?? ""))
                     .font(.caption).foregroundStyle(.secondary)
             }
@@ -153,8 +150,7 @@ struct PredictionCallRow: View {
                 StatusDot(ok: call.status == "ok")
                 Text("\(call.t.formatted(date: .omitted, time: .shortened)) · \(call.purpose) · \(call.model) \(call.effort)")
                 Spacer()
-                Text(String(format: "%.1f s", Double(call.ms) / 1000) + " · \((call.tokens?.input ?? 0) + (call.tokens?.output ?? 0)) tokens"
-                     + (call.home == "shared" ? " · ~/.codex" : ""))
+                Text(String(format: "%.1f s", Double(call.ms) / 1000) + " · \((call.tokens?.input ?? 0) + (call.tokens?.output ?? 0)) tokens")
                     .foregroundStyle(.secondary)
             }
         }

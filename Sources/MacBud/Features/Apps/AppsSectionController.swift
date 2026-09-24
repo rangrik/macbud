@@ -157,6 +157,9 @@ final class AppsSectionController {
 
     func queryChanged() { selectedIndex = 0 }
 
+    /// The tile `didShow` starts on: the most recent app that is not the one you are in.
+    var switchTarget: AppEntry? { grid.items.first { $0.bundleID != context.frontmost.previousApp?.bundleIdentifier } }
+
     func handle(_ command: PanelCommand) -> Bool {
         let grid = grid
         switch command {
@@ -184,7 +187,7 @@ final class AppsSectionController {
         // Switch first, close second. Closing the panel hands focus back to whatever app you came
         // from, and that lands after our activation if we close first — leaving the right window
         // raised inside an app that never came forward.
-        context.onAct?("switch")
+        context.onUse?("switch", .app(entry, switchTarget: switchTarget))
         defer { context.notch.close() }
         if let window = entry.windowID.flatMap({ windowsByID[$0] }), WindowIndex.raise(window) {
             Log.app.info("apps: raised \(window.appName) · \(window.displayTitle)")

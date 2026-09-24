@@ -19,81 +19,46 @@ nonisolated struct ModelError: LocalizedError, Sendable {
     var errorDescription: String? { message }
 }
 
-/// Why calls cannot run right now.
-nonisolated enum RunnerBlock: Equatable, Sendable { case missingCLI, notSignedIn }
-
 nonisolated protocol ModelRunner: Sendable {
-    /// "macbud" for MacBud's own Codex home, "shared" for the QA-only ~/.codex path.
-    var home: String { get }
-    func blocker() async -> RunnerBlock?
+    /// Nil when the Codex CLI cannot be found.
     func codexPath() async -> String?
     func run(_ call: ModelCall) async throws -> ModelReply
 }
 
-/// Runs `codex exec` with MacBud's own Codex home, so sessions and logins stay apart from the owner's.
+/// Runs `codex exec` on the owner's own Codex login. `--ephemeral` keeps these runs out of their Codex history
+/// and `--ignore-user-config` keeps their MCP servers and settings out; MacBud keeps its own ledger instead.
 actor CodexRunner: ModelRunner {
-    nonisolated let home: String
-    nonisolated let directory: URL
     private var located: (executable: URL, path: String)?
     private var lastLookup = Date.distantPast
 
-    nonisolated static let signInCommand = #"CODEX_HOME="$HOME/Library/Application Support/MacBud/codex" codex login --device-auth"#
     /// Tools the models must not have; `-c` form because unknown names are ignored there.
     private nonisolated static let disabledFeatures = ["apps", "browser_use", "computer_use", "goals", "hooks", "image_generation",
-                                           "memories", "multi_agent", "plugins", "shell_tool", "skill_search",
-                                           "tool_suggest", "unified_exec", "view_image"]
-
-    init(directory: URL = DataStore.default.directory.appendingPathComponent("codex", isDirectory: true),
-         shared: Bool = ProcessInfo.processInfo.environment["MACBUD_CODEX_SHARED_HOME"] == "1") {
-        self.directory = directory
-        home = shared ? "shared" : "macbud"
-    }
-
-    func blocker() async -> RunnerBlock? {
-        prepare()
-        guard await locate() != nil else { return .missingCLI }
-        let signedIn = home == "shared" || FileManager.default.fileExists(atPath: directory.appendingPathComponent("auth.json").path)
-        return signedIn ? nil : .notSignedIn
-    }
+                                                       "memories", "multi_agent", "plugins", "shell_tool", "skill_search",
+                                                       "tool_suggest", "unified_exec", "view_image"]
 
     func codexPath() async -> String? { await locate()?.executable.path }
 
     func run(_ call: ModelCall) async throws -> ModelReply {
         guard let codex = await locate() else { throw ModelError(message: "Codex CLI not found in your login shell") }
-        let schema = directory.appendingPathComponent("\(call.purpose).schema.json")
-        let prompt = FileManager.default.temporaryDirectory.appendingPathComponent("macbud-\(UUID().uuidString).prompt")
-        try Data(call.schema.utf8).write(to: schema, options: .atomic)
-        try Data(call.prompt.utf8).write(to: prompt)
-        defer { try? FileManager.default.removeItem(at: prompt) }
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("macbud-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        for (name, text) in ["prompt.txt": call.prompt, "schema.json": call.schema, "instructions.md": PredictionPrompts.instructions] {
+            try Data(text.utf8).write(to: dir.appendingPathComponent(name))
+        }
         var args = ["exec", "--ephemeral", "--ignore-user-config", "--skip-git-repo-check", "-s", "read-only",
                     "-m", call.model, "-c", "model_reasoning_effort=\(call.effort)",
-                    "-c", "model_instructions_file=\"\(directory.appendingPathComponent("instructions.md").path)\"",
+                    "-c", "model_instructions_file=\"\(dir.appendingPathComponent("instructions.md").path)\"",
                     "-c", "include_environment_context=false", "-c", "include_permissions_instructions=false",
                     "-c", "web_search=disabled"]
         args += Self.disabledFeatures.flatMap { ["-c", "features.\($0)=false"] }
+        args += ["--output-schema", dir.appendingPathComponent("schema.json").path, "--json", "-"]
         var env = ProcessInfo.processInfo.environment
         env["PATH"] = codex.path
-        if home == "shared" {
-            env.removeValue(forKey: "CODEX_HOME")
-        } else {
-            env["CODEX_HOME"] = directory.path
-            args += ["-c", "cli_auth_credentials_store=\"file\""]
-        }
-        args += ["--output-schema", schema.path, "--json", "-"]
-        let result = try await Self.execute(codex.executable, args, env: env, cwd: directory, input: prompt, timeout: call.timeout)
+        let result = try await Self.execute(codex.executable, args, env: env, cwd: dir, input: dir.appendingPathComponent("prompt.txt"),
+                                            timeout: call.timeout)
         if result.timedOut { throw ModelError(message: "Timed out after \(call.timeout)") }
         return try Self.parse(result.out, stderr: result.err)
-    }
-
-    /// Writes the files `codex login` and `codex exec` need, so the sign-in command works before any call.
-    private func prepare() {
-        let files = ["instructions.md": PredictionPrompts.instructions,
-                     "config.toml": "# Written by MacBud: keep this home's login in auth.json here.\ncli_auth_credentials_store = \"file\"\n"]
-        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        for (name, text) in files {
-            let url = directory.appendingPathComponent(name)
-            if (try? String(contentsOf: url, encoding: .utf8)) != text { try? Data(text.utf8).write(to: url, options: .atomic) }
-        }
     }
 
     /// GUI apps do not get the owner's shell PATH, so ask their login shell once, like their terminal would.
@@ -102,7 +67,8 @@ actor CodexRunner: ModelRunner {
         guard Date.now.timeIntervalSince(lastLookup) > 300 else { return nil }
         lastLookup = .now
         let shell = try? await Self.execute(URL(fileURLWithPath: "/bin/zsh"), ["-lic", "command -v codex; command -v node"],
-                                            env: ProcessInfo.processInfo.environment, cwd: directory, input: nil, timeout: .seconds(10))
+                                            env: ProcessInfo.processInfo.environment, cwd: FileManager.default.temporaryDirectory,
+                                            input: nil, timeout: .seconds(10))
         let lines = String(decoding: shell?.out ?? Data(), as: UTF8.self).split(separator: "\n").map(String.init)
         func real(_ name: String) -> URL? {
             lines.last { $0.hasPrefix("/") && $0.hasSuffix("/" + name) }.map { URL(fileURLWithPath: $0).resolvingSymlinksInPath() }
