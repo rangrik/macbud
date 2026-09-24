@@ -106,14 +106,19 @@ One line of evidence each: test count, PR URL, merge commit, installed version, 
 
 ## 8. Clean up
 
-Ask the user before removing the worktree. It holds the code plus `build/`, `build-release/` and `dist/`
-(about 500 MB), so say its size. Only on a yes:
+Each worktree keeps its code plus `build/`, `build-release/` and `dist/` (about 500 MB). List every
+worktree except the main checkout, with its size, any uncommitted or unmerged work, and its Paseo
+workspace if it has one. Ask which to delete: the user can pick one or more, or keep them all to go on
+working. Delete nothing without that explicit answer.
 
-- Paseo worktree (under `~/.paseo/worktrees/`): archive its workspace. Paseo deletes the worktree once no
-  workspace uses it. Do this last, because it also stops the agent running there.
-- Any other worktree: `git -C <main checkout> worktree remove --force <path>`.
+For each one picked, delete it from disk and archive its Paseo workspace:
 
-Then delete the merged local branch and confirm the directory is gone.
+- Paseo worktree (under `~/.paseo/worktrees/`): archive its workspace. Paseo then deletes the worktree.
+- Any other worktree: `git -C <main checkout> worktree remove --force <path>`, then archive any Paseo
+  workspace that points at it.
+
+Then `git branch -d` its merged local branch and confirm the directory is gone. Do the current worktree
+last, because archiving its workspace stops the agent running there.
 
 ## Stop and ask
 
