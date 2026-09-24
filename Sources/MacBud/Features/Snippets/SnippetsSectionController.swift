@@ -131,6 +131,7 @@ final class SnippetsSectionController {
     }
 
     func activate(_ snippet: Snippet, paste: Bool) {
+        context.onUse?(paste ? "paste" : "copy", Outcome(kind: .snippet))
         let expansion = expand(snippet)
         let paster = context.paster
         store.recordUse(snippet.id)

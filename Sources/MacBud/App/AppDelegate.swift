@@ -19,6 +19,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                        clipboardStore: clipboardStore, snippetStore: snippetStore, library: library)
         notch.keyHandler = { [coordinator] event in coordinator!.handle(event: event) }
         notch.willOpen = { [coordinator] in coordinator!.willOpen() }
+        notch.sectionForOpen = { [coordinator] in coordinator!.openingSection() }
         notch.contentProvider = { [coordinator] in IslandContentView(state: coordinator!.state, coordinator: coordinator!) }
         notch.dictationProvider = { [coordinator, settings, notch] in
             AnyView(DictationView(controller: coordinator!.dictation, settings: settings,
@@ -55,6 +56,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
         if settings.isEnabled(.apps) { coordinator.appIndex.refresh(force: true) }
+        // Unit tests run inside this app; keep them out of the owner's prediction memory.
+        if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil { Task { await coordinator.predictor.start() } }
         monitor = ClipboardMonitor(store: clipboardStore, settings: settings)
         if settings.isEnabled(.clipboard) { monitor.start() }
 

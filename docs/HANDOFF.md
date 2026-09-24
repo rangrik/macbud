@@ -1,4 +1,14 @@
-# Latest update — section shortcuts follow the tab order (2026-09-05)
+# Latest update — predicted opening section (2026-09-24)
+
+⌥Space and the notch tab no longer reopen the last section. `NotchController.sectionForOpen` asks `PanelCoordinator.openingSection()`, which reads a cached **landing intent** (kind + newest/older hint) from `SectionPredictor`, else the rules (screenshot or dictation in the last 60 s, else text). `IntentKind.section` is the only place intents meet tabs, so the planned shelf UI is one edit there. A background `codex exec` driver (gpt-6-luna, medium) fills the cache; a reviewer (gpt-6-sol, high) rewrites `strategies.md` after 10 misses or 12 h with a miss. Outcomes are the kind of item used and whether it was the newest. Everything is in `~/Library/Application Support/MacBud/predict/` and in Settings → Prediction, including every prompt and reply. Codex runs on the owner's own login with `--ephemeral --ignore-user-config`; about 9k input tokens a call.
+
+Gotcha: never call `Process.waitUntilExit()` from async code. QA caught it hanging forever on a concurrency thread after `codex` had exited, which left the predictor busy and silently on rules; `CodexRunner.execute` polls `isRunning` instead.
+
+Verification: **134 tests in 24 suites passed** (new: prompt redaction, failing runner → rules, `codex --json` parsing, misses → reviewer → next driver prompt). Live QA in the Debug app through `mbctl`: a new screenshot opened on Screenshots and copying it scored a hit; a file dictation opened on History and deleting it scored a hit; deleting MacBud's own clipboard copy after a `text` prediction scored a miss; with the threshold at 1 the reviewer ran (15 s) and the next driver prompt carried its strategies. Open took 21.1 ms median with prediction on and 22.8 ms off (same section, 20 opens each); the pick itself 0.55 ms. The Settings pane was checked in an AppKit render, not on screen, because the screen was locked. QA memory was deleted afterwards; the call ledger was kept.
+
+---
+
+# Previous update — section shortcuts follow the tab order (2026-09-05)
 
 ⌘1…⌘4 used to name a fixed section (`selectClipboard`, `selectSnippets`, …), so reordering tabs in Settings → Features left Screenshots at position 2 answering to ⌘3. The bindable commands are now tab positions (`selectSection1`…`selectSection4` → `PanelCommand.selectSectionAt(index)`), resolved against `settings.enabledSections` when the key is pressed. Hiding a feature closes the gap rather than skipping a number, and a position with no tab does nothing. Settings written before this keep their chords: decoding moves each retired per-section command to the slot its section held in the default order, and drops commands that no longer exist. Settings → Shortcuts names the current occupant of each slot ("Go to section 2 — Screenshots"), disables slots with no tab, and says the shortcuts follow the tab order; each island tab's tooltip shows the chord that opens it.
 

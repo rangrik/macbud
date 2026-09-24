@@ -9,6 +9,8 @@ final class ActionContext {
     let frontmost: FrontmostTracker
     let paster = Paster.shared
     private var hintTask: Task<Void, Never>?
+    /// Told when the owner uses an item, by key or mouse, so a prediction can be scored.
+    var onUse: ((String, Outcome) -> Void)?
     /// Reaching a real input needs Accessibility and focus, so tests replace this.
     var insertText: (String, String?) async -> Bool = { text, bundleID in
         await Paster.shared.insertIntoFocusedInput(text, expectedBundleID: bundleID)

@@ -38,6 +38,7 @@ final class AppSettings {
     }
     static let copyPromptChoices = [15, 30, 45, 60]
     var showNotchTab = true { didSet { set(showNotchTab, "showNotchTab") } }
+    var prediction = PredictionConfig() { didSet { setCodable(prediction, "prediction") } }
     var hasConfiguredLaunchAtLogin = false { didSet { set(hasConfiguredLaunchAtLogin, "hasConfiguredLaunchAtLogin") } }
     private(set) var sectionOrder: [Section] = Section.allCases {
         didSet { set(sectionOrder.map(\.rawValue), "sectionOrder") }
@@ -76,6 +77,7 @@ final class AppSettings {
         dictationLocale = defaults.string(forKey: "dictationLocale") ?? ""
         dictationCopyPromptSeconds = min(max(defaults.object(forKey: "dictationCopyPromptSeconds") as? Int ?? 15, 15), 60)
         showNotchTab = defaults.object(forKey: "showNotchTab") as? Bool ?? true
+        prediction = codable(PredictionConfig.self, "prediction") ?? PredictionConfig()
         hasConfiguredLaunchAtLogin = defaults.bool(forKey: "hasConfiguredLaunchAtLogin")
         rememberLastSection = defaults.object(forKey: "rememberLastSection") as? Bool ?? true
         lastSection = defaults.string(forKey: "lastSection").flatMap(Section.init(rawValue:)) ?? .clipboard
@@ -159,4 +161,19 @@ final class AppSettings {
         guard let data = defaults.data(forKey: key), !data.isEmpty else { return nil }
         return try? JSONDecoder().decode(T.self, from: data)
     }
+}
+
+/// Predicted opening section. Stored as one value so new knobs do not each need a key.
+nonisolated struct PredictionConfig: Codable, Equatable, Sendable {
+    var enabled = true
+    /// The kill switch for Codex; off means heuristics only.
+    var useModel = true
+    var driverModel = "gpt-6-luna"
+    var driverEffort = "medium"
+    var reviewerModel = "gpt-6-sol"
+    var reviewerEffort = "high"
+    var missThreshold = 10
+    var reviewHours = 12
+    var dailyCallCap = 100
+    static let efforts = ["low", "medium", "high", "xhigh"]
 }
