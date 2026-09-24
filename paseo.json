@@ -1,0 +1,5 @@
+{
+  "worktree": {
+    "setup": "src=\"$PASEO_SOURCE_CHECKOUT_PATH\"\ngit -C \"$src\" fetch -q origin main || true\nif [ \"$(git -C \"$src\" branch --show-current)\" = main ]; then git -C \"$src\" merge --ff-only -q origin/main || echo 'Local main could not fast-forward'; fi"
+  }
+}

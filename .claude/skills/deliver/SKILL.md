@@ -66,6 +66,12 @@ git diff --stat HEAD origin/main   # must be empty
 make test                          # this tree is what gets packaged and installed
 ```
 
+Then fast-forward local `main` in the main checkout, so the next worktree does not start from a stale `main`:
+
+```bash
+git -C "$(git worktree list | awk '/\[main\]$/{print $1}')" merge --ff-only origin/main
+```
+
 ## 5. Package and install
 
 ```bash
