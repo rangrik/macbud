@@ -96,13 +96,13 @@ actor CodexRunner: ModelRunner {
         process.standardOutput = try FileHandle(forWritingTo: out)
         process.standardError = try FileHandle(forWritingTo: err)
         try process.run()
+        // Poll, never `waitUntilExit()`: on a concurrency thread it can wait forever for a run-loop message.
         let deadline = ContinuousClock.now + timeout
         var timedOut = false
         while process.isRunning {
-            if ContinuousClock.now > deadline { timedOut = true; process.terminate(); break }
+            if !timedOut, ContinuousClock.now > deadline { timedOut = true; process.terminate() }
             try? await Task.sleep(for: .milliseconds(50))
         }
-        process.waitUntilExit()
         return (try Data(contentsOf: out), try Data(contentsOf: err), timedOut)
     }
 

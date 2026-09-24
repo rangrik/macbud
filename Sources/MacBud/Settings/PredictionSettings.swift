@@ -20,7 +20,7 @@ struct PredictionSettings: View {
             SwiftUI.Section("Models and limits") {
                 modelRow("Driver (predicts)", model: $settings.prediction.driverModel, effort: $settings.prediction.driverEffort)
                 modelRow("Reviewer (learns)", model: $settings.prediction.reviewerModel, effort: $settings.prediction.reviewerEffort)
-                LabeledContent("Codex CLI", value: predictor.codexPath ?? "Not found yet")
+                LabeledContent("Codex CLI", value: predictor.codexPath.map { ($0 as NSString).abbreviatingWithTildeInPath } ?? "Not found yet")
                 Text("Runs on your Codex login with nothing saved to your Codex history; MacBud keeps its own ledger below.")
                     .font(.caption).foregroundStyle(.secondary)
                 Stepper("Review after \(settings.prediction.missThreshold) misses", value: $settings.prediction.missThreshold, in: 1...50)
@@ -102,7 +102,7 @@ struct PredictionSettings: View {
     private func modelRow(_ title: String, model: Binding<String>, effort: Binding<String>) -> some View {
         LabeledContent(title) {
             HStack {
-                TextField(title, text: model).labelsHidden().frame(width: 140)
+                TextField(title, text: model).labelsHidden().textFieldStyle(.roundedBorder).frame(width: 140)
                 Picker(title, selection: effort) { ForEach(PredictionConfig.efforts, id: \.self) { Text($0).tag($0) } }
                     .labelsHidden().frame(width: 90)
             }

@@ -23,9 +23,8 @@ dictation → History, snippet → Snippets, app → Apps, text/link/image → C
 3. **Reviewer** (`gpt-6-sol`, `high`) reads the driver's misses and notes and rewrites `strategies.md`,
    which the driver reads on every later call.
 
-Opening never waits on a model. `open` reads the cache: a fresh intent for the current context key wins;
-otherwise the heuristic's. Explicit opens (⌥⇧V, menu items) are not predictions and are not scored.
-With prediction on, "Reopen the last used section" is ignored (the toggle is greyed out).
+Opening never waits on a model: a fresh cached intent for the current context key wins, else the heuristic's.
+Explicit opens (⌥⇧V, menu items) are not scored. With prediction on, "Reopen the last used section" is greyed out.
 
 **Strategies are free text, not executable rules.** Opening only ever reads a cache, so rules evaluated by
 the app would not make opening faster; they would only add a rule format, a parser and a validator.
@@ -111,6 +110,7 @@ Driver and reviewer model and effort, the `codex` path. Numbers: misses before r
 daily call cap (100). Last 7 days: hit rate of the model and of the rules. Today: calls and tokens per model.
 The current strategies and when they were written. **Recent opens** (intent, what was used, hit).
 **Activity**: every call with its full prompt and reply. Buttons: Review now, Open memory folder, Reset memory.
+For QA, `Trace` logs pick and open time, and `macbud://dump` has a `prediction` block.
 
 ## Future UI
 
@@ -119,8 +119,3 @@ and kind chips (All · Text · Links · Images · Screenshots · Dictations · S
 `IntentKind.section` changes then: an intent picks the preselected chip, which shelf card gets the ring (the
 hint), and whether to open straight into expanded (for example `app`). Signals, memory, prompts, the review
 loop and Settings already speak in kinds and items, so the data stays valid.
-
-## Evidence
-
-`Trace` logs the time spent picking and the whole `open`, with prediction on and off.
-`macbud://dump` gains a `prediction` block (status, cache size, last session) for scripted QA.
