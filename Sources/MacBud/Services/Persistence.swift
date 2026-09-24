@@ -61,4 +61,48 @@ actor DataStore {
     }
 
     nonisolated func imageURL(named name: String) -> URL { imagesDirectory.appendingPathComponent(name) }
+
+    // MARK: Plain files the owner can read (JSONL and Markdown)
+
+    private static let lineEncoder: JSONEncoder = {
+        let e = JSONEncoder()
+        e.dateEncodingStrategy = .iso8601
+        e.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        return e
+    }()
+
+    /// Appends one JSON line; past `limit` bytes only the newer half is kept.
+    func appendLine<T: Encodable & Sendable>(_ value: T, to name: String, limit: Int = 2_000_000) {
+        guard var line = try? Self.lineEncoder.encode(value) else { return }
+        line.append(0x0A)
+        let url = directory.appendingPathComponent(name)
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        guard let handle = try? FileHandle(forWritingTo: url) else { try? line.write(to: url, options: .atomic); return }
+        let size = (try? handle.seekToEnd()) ?? 0
+        try? handle.write(contentsOf: line)
+        try? handle.close()
+        guard size > limit, let data = try? Data(contentsOf: url) else { return }
+        let lines = data.split(separator: 0x0A)
+        try? Data((lines.suffix(lines.count / 2).joined(separator: [0x0A])) + [0x0A]).write(to: url, options: .atomic)
+    }
+
+    func lines<T: Decodable & Sendable>(_ type: T.Type, in name: String) -> [T] {
+        guard let data = try? Data(contentsOf: directory.appendingPathComponent(name)) else { return [] }
+        return data.split(separator: 0x0A).compactMap { try? Self.decoder.decode(T.self, from: Data($0)) }
+    }
+
+    func text(_ name: String) -> (text: String, modified: Date?)? {
+        let url = directory.appendingPathComponent(name)
+        guard let text = try? String(contentsOf: url, encoding: .utf8) else { return nil }
+        return (text, try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate)
+    }
+
+    func writeText(_ text: String, to name: String) {
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try? Data(text.utf8).write(to: directory.appendingPathComponent(name), options: .atomic)
+    }
+
+    func remove(_ names: [String]) {
+        for name in names { try? FileManager.default.removeItem(at: directory.appendingPathComponent(name)) }
+    }
 }

@@ -9,6 +9,9 @@ struct SettingsView: View {
             Tab("General", systemImage: "gearshape") { GeneralSettings(settings: app.settings, hotKeys: app.hotKeys) }
             Tab("Features", systemImage: "slider.horizontal.3") { FeaturesSettings(settings: app.settings) }
             Tab("Shortcuts", systemImage: "keyboard") { ShortcutsSettings(settings: app.settings, hotKeys: app.hotKeys) }
+            if let predictor = app.coordinator?.predictor {
+                Tab("Prediction", systemImage: "sparkles") { PredictionSettings(settings: app.settings, predictor: predictor) }
+            }
             if app.settings.isEnabled(.clipboard) {
                 Tab("Clipboard", systemImage: "doc.on.clipboard") { ClipboardSettings(settings: app.settings, store: app.clipboardStore) }
             }
@@ -43,6 +46,8 @@ struct GeneralSettings: View {
                 }
                 Text("⌘↩ always does the other one.").font(.caption).foregroundStyle(.secondary)
                 Toggle("Reopen the last used section", isOn: $settings.rememberLastSection)
+                    .disabled(settings.prediction.enabled)
+                    .help(settings.prediction.enabled ? "Off while Prediction picks the opening section." : "")
                 Toggle("Show a clickable notch tab on every display", isOn: $settings.showNotchTab)
                 Text("External displays get a drawn notch; the shortcut opens on the display you are working on.")
                     .font(.caption).foregroundStyle(.secondary)

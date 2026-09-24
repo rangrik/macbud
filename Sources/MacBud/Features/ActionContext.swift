@@ -9,6 +9,8 @@ final class ActionContext {
     let frontmost: FrontmostTracker
     let paster = Paster.shared
     private var hintTask: Task<Void, Never>?
+    /// Told when the owner uses an item, by key or mouse, so a prediction can be scored.
+    var onAct: ((String) -> Void)?
     /// Reaching a real input needs Accessibility and focus, so tests replace this.
     var insertText: (String, String?) async -> Bool = { text, bundleID in
         await Paster.shared.insertIntoFocusedInput(text, expectedBundleID: bundleID)
@@ -62,6 +64,7 @@ final class ActionContext {
 
     /// Runs `copy`, then either collapses with a "Copied" toast or pastes into the previous app.
     func perform(paste: Bool, description: String, charactersAfterCursor: Int? = nil, copy: () -> Void) {
+        onAct?(paste ? "paste" : "copy")
         copy()
         let appName = frontmost.previousAppName ?? "the active app"
         guard paste else {

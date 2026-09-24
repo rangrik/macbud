@@ -21,6 +21,7 @@ final class PanelCoordinator {
     let appIndex: AppIndex
     let apps: AppsSectionController
     let windowPreviews: WindowPreviewCache
+    let predictor: SectionPredictor
     private(set) var isHoldingToTalk = false
     private(set) var dictationSessionHotKey: HotKey?
     let keepAwake = KeepAwakeController()
@@ -32,7 +33,7 @@ final class PanelCoordinator {
 
     init(state: NotchState, notch: NotchController, settings: AppSettings,
          clipboardStore: ClipboardStore, snippetStore: SnippetStore, library: ScreenshotLibrary,
-         appIndex: AppIndex = AppIndex()) {
+         appIndex: AppIndex = AppIndex(), runner: any ModelRunner = CodexRunner()) {
         self.state = state
         self.notch = notch
         self.settings = settings
@@ -52,7 +53,16 @@ final class PanelCoordinator {
         let previews = WindowPreviewCache()
         windowPreviews = previews
         apps = AppsSectionController(index: appIndex, context: context, previews: previews)
+        predictor = SectionPredictor(settings: settings, memory: DataStore(directory: snippetStore.dataStore.directory.appendingPathComponent("predict")),
+                                     runner: runner) { [dictationHistoryStore] in
+            PredictionContext.capture(clipboard: clipboardStore.items, media: library.items, dictations: dictationHistoryStore.items,
+                                      app: NSWorkspace.shared.frontmostApplication?.bundleIdentifier, enabled: settings.enabledSections)
+        }
         clipboard.snippets = snippets
+        context.onAct = { [weak self] action in
+            guard let self else { return }
+            predictor.noteAction(action, in: state.section)
+        }
         dictation.onDidEnd = { [weak self] in self?.notch.close() }
         dictation.onActivityChanged = { [weak self] active in
             guard let self else { return }
@@ -92,9 +102,14 @@ final class PanelCoordinator {
     func open(section: Section? = nil) {
         if let section, !settings.isEnabled(section.feature) { return }
         if dictation.isActive { dictation.cancel() }
+        notch.open(section: section)
+    }
+
+    /// Where an open without a named section lands. The notch asks, so tab clicks use it too.
+    func openingSection() -> Section? {
+        if settings.prediction.enabled { return predictor.sectionForOpen() }
         let preferred = settings.rememberLastSection ? settings.lastSection : (settings.enabledSections.first ?? .clipboard)
-        let target = section ?? (settings.isEnabled(preferred.feature) ? preferred : settings.enabledSections.first)
-        notch.open(section: target)
+        return settings.isEnabled(preferred.feature) ? preferred : settings.enabledSections.first
     }
 
     func toggle() {
@@ -140,6 +155,7 @@ final class PanelCoordinator {
     /// new window would sit behind the app the user was in; order it front regardless.
     func didClose() {
         if dictation.isActive { dictation.cancel() }
+        predictor.sessionEnded()
         guard !settingsVisibleAtOpen else { return }
         Task { @MainActor [weak self] in
             for _ in 0..<15 {
@@ -174,6 +190,7 @@ final class PanelCoordinator {
         if snippets.isEditing { snippets.cancelEditing() }
         state.section = section
         settings.lastSection = section
+        predictor.noteVisit(section)
         state.query = ""
         state.wantsSearchFocus = true
         context.clearHint()
@@ -265,6 +282,13 @@ final class PanelCoordinator {
     private func activeHandle(_ command: PanelCommand) -> Bool {
         guard hasEnabledSection else { return false }
         if command == .saveAsSnippet, !settings.isEnabled(.snippets) { return false }
+        switch command {
+        case .primaryAction, .secondaryAction, .delete, .clearAll, .togglePin, .saveAsSnippet, .newItem, .editItem,
+             .revealInFinder, .quickLook:
+            // Before the section acts: acting may close the island, which ends the session.
+            predictor.noteAction(String(describing: command), in: state.section)
+        default: break
+        }
         return switch state.section {
         case .clipboard: clipboard.handle(command)
         case .snippets: snippets.handle(command)
@@ -372,6 +396,7 @@ final class PanelCoordinator {
             "dictation": ["phase": String(describing: dictation.phase), "transcript": dictation.transcript, "canRetry": dictation.canRetry],
             "keepAwake": ["active": keepAwake.isActive, "error": keepAwake.errorMessage ?? ""],
             "section": state.section.rawValue,
+            "prediction": predictor.dump(),
             "enabledSections": settings.enabledSections.map(\.rawValue),
             "disabledFeatures": settings.disabledFeatures.map(\.rawValue).sorted(),
             "query": state.query,

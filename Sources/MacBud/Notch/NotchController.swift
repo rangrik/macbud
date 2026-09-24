@@ -20,6 +20,8 @@ final class NotchController {
     var keyHandler: ((NSEvent) -> Bool)?
     var willOpen: (() -> Void)?
     var didClose: (() -> Void)?
+    /// Where an open without a named section lands, so a tab click and the shortcut agree.
+    var sectionForOpen: (() -> Section?)?
 
     static let openAnimation: Animation = .spring(duration: 0.38, bounce: 0.18)
     static let closeAnimation: Animation = .spring(duration: 0.26, bounce: 0)
@@ -207,6 +209,7 @@ final class NotchController {
     func open(on screen: ScreenNotch) { open(section: nil, on: screen) }
 
     private func open(section: Section?, on screen: ScreenNotch?) {
+        let started = ContinuousClock.now
         if let screen {
             syncScreens()
             state.geometry = screen.geometry
@@ -219,7 +222,7 @@ final class NotchController {
         state.toast = nil
         state.basePhase = .idle
         applyBaseFrame()
-        if let section { state.section = section }
+        if let section = section ?? sectionForOpen?() { state.section = section }
         state.query = ""
         state.footerHint = nil
         willOpen?()
@@ -232,7 +235,7 @@ final class NotchController {
         withAnimation(Self.openAnimation) { state.phase = .expanded }
         state.wantsSearchFocus = true
         Log.notch.debug("open \(self.state.section.rawValue)")
-        Trace.log("open \(state.section.rawValue) display=\(state.geometry.displayID) key=\(panel.isKeyWindow) firstResponder=\(String(describing: panel.firstResponder))")
+        Trace.log("open \(state.section.rawValue) took=\(ContinuousClock.now - started) display=\(state.geometry.displayID) key=\(panel.isKeyWindow) firstResponder=\(String(describing: panel.firstResponder))")
     }
 
     func close() {

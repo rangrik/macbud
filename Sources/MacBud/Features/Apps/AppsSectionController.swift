@@ -184,6 +184,7 @@ final class AppsSectionController {
         // Switch first, close second. Closing the panel hands focus back to whatever app you came
         // from, and that lands after our activation if we close first — leaving the right window
         // raised inside an app that never came forward.
+        context.onAct?("switch")
         defer { context.notch.close() }
         if let window = entry.windowID.flatMap({ windowsByID[$0] }), WindowIndex.raise(window) {
             Log.app.info("apps: raised \(window.appName) · \(window.displayTitle)")

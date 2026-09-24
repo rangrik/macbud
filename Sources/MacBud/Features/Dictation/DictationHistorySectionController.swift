@@ -23,6 +23,7 @@ final class DictationHistorySectionController {
 
     func use(_ item: DictationHistoryItem, insert: Bool) {
         // History is a key panel: restore its captured target before the same focused-input validation.
+        context.onAct?(insert ? "insert" : "copy")
         let target = context.frontmost.previousApp
         context.notch.close()
         Task {
