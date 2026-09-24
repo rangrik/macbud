@@ -148,7 +148,7 @@ struct NotchTabContent: View {
         .accessibilityHint("Click to open MacBud")
     }
 
-    /// With the clock on, the logo moves across to sit beside Keep Awake at the outer edge.
+    /// With the clock on, the logo moves to the outer right edge. It is in color only while Keep Awake is on.
     @ViewBuilder private func leftWing(hovered: Bool) -> some View {
         if let clock = state.clockText {
             Text(clock)
@@ -156,29 +156,18 @@ struct NotchTabContent: View {
                 .foregroundStyle(.white.opacity(hovered ? 1 : 0.78))
                 .accessibilityLabel("Time \(clock)")
         } else {
-            MacBudMark(size: hovered ? 19 : 17)
+            MacBudMark(size: hovered ? 19 : 17, lit: state.keepsAwake)
         }
     }
 
     @ViewBuilder private func rightWing(hovered: Bool) -> some View {
         if state.clockText != nil {
-            HStack(spacing: 6) {
-                if let symbol = statusSymbol { statusGlyph(symbol) }
-                MacBudMark(size: hovered ? 19 : 17)
-            }
+            MacBudMark(size: hovered ? 19 : 17, lit: state.keepsAwake)
         } else {
-            statusGlyph(statusSymbol ?? "chevron.down", idle: statusSymbol == nil, hovered: hovered)
+            Image(systemName: "chevron.down")
+                .font(.system(size: 9, weight: .bold))
+                .foregroundStyle(.white.opacity(hovered ? 0.95 : 0.42))
         }
-    }
-
-    private var statusSymbol: String? {
-        state.keepsAwake ? "sun.max.fill" : state.notchStatusSymbol
-    }
-
-    private func statusGlyph(_ symbol: String, idle: Bool = false, hovered: Bool = false) -> some View {
-        Image(systemName: symbol)
-            .font(.system(size: idle ? 9 : 10, weight: .bold))
-            .foregroundStyle(state.keepsAwake ? .orange : (idle ? .white.opacity(hovered ? 0.95 : 0.42) : Theme.warning))
     }
 }
 

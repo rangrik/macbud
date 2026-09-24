@@ -63,8 +63,6 @@ final class NotchState {
     var footerHint: String?
     /// Draw a clickable tab with an icon beside the idle notch.
     var showsNotchTab = true
-    /// Small status glyph shown in the idle tab (e.g. "pause.fill" while capture is paused).
-    var notchStatusSymbol: String?
     var keepsAwake = false
     var clockText: String?
     var tabHovered = false

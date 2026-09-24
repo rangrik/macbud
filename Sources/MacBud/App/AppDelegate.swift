@@ -30,7 +30,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         coordinator.dictation.onEditingChanged = { [notch] editing in notch.setDictationKeyboardFocus(editing) }
         notch.didClose = { [coordinator] in coordinator!.didClose() }
         notch.state.showsNotchTab = settings.showNotchTab
-        notch.state.notchStatusSymbol = settings.isEnabled(.clipboard) && settings.clipboardPaused ? "pause.fill" : nil
         coordinator.clock.onChange = { [weak coordinator, weak notch] in
             notch?.state.clockText = coordinator?.clockText
         }
@@ -122,7 +121,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 coordinator.dictationHistoryStore.limit = settings.historyLimit
                 hotKeys.apply()
                 notch.state.showsNotchTab = settings.showNotchTab
-                notch.state.notchStatusSymbol = settings.isEnabled(.clipboard) && settings.clipboardPaused ? "pause.fill" : nil
                 notch.applyBaseFrame(phase: notch.state.basePhase)
                 observeSettings()
             }

@@ -56,15 +56,18 @@ struct FeatureBadge: View {
 }
 
 /// The user's sunrise artwork, shared by the notch and welcome screen.
+/// Unlit it goes plain white, like the menu bar icon.
 struct MacBudMark: View {
     var size: CGFloat = 24
+    var lit = true
 
     var body: some View {
         Image("MacBudMark")
-            .renderingMode(.original)
+            .renderingMode(lit ? .original : .template)
             .resizable()
             .interpolation(.high)
             .scaledToFit()
+            .foregroundStyle(.white)
             .frame(width: size, height: size)
             .accessibilityHidden(true)
     }
