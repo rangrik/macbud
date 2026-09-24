@@ -104,6 +104,17 @@ Then restore the `gh` account you switched away from.
 
 One line of evidence each: test count, PR URL, merge commit, installed version, release URL.
 
+## 8. Clean up
+
+Ask the user before removing the worktree. It holds the code plus `build/`, `build-release/` and `dist/`
+(about 500 MB), so say its size. Only on a yes:
+
+- Paseo worktree (under `~/.paseo/worktrees/`): archive its workspace. Paseo deletes the worktree once no
+  workspace uses it. Do this last, because it also stops the agent running there.
+- Any other worktree: `git -C <main checkout> worktree remove --force <path>`.
+
+Then delete the merged local branch and confirm the directory is gone.
+
 ## Stop and ask
 
 - Tests fail at any of the three points, the tree is dirty, or `codesign --verify` fails.
