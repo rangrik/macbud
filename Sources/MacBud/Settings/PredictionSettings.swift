@@ -26,11 +26,16 @@ struct PredictionSettings: View {
                 modelRow("Driver (predicts)", model: $settings.prediction.driverModel, effort: $settings.prediction.driverEffort)
                 modelRow("Reviewer (learns)", model: $settings.prediction.reviewerModel, effort: $settings.prediction.reviewerEffort)
                 LabeledContent("Codex CLI", value: predictor.codexPath.map { ($0 as NSString).abbreviatingWithTildeInPath } ?? "Not found yet")
-                Text("Runs on your Codex login with nothing saved to your Codex history; MacBud keeps its own ledger in Prediction Activity.")
-                    .font(.caption).foregroundStyle(.secondary)
+                Text(CodexRunner.signedIn
+                     ? "Runs on MacBud's own Codex sign-in and resumes one thread, so each call sends only what changed. Nothing lands in your Codex history; MacBud keeps its own ledger in Prediction Activity."
+                     : "Each call starts a new session on your Codex login. To keep one thread instead, so most of each call comes from Codex's cache, sign MacBud in once in Terminal:\nCODEX_HOME=\"\(CodexRunner.home.path)\" codex login --device-auth")
+                    .font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
                 Stepper("Review after \(settings.prediction.missThreshold) misses", value: $settings.prediction.missThreshold, in: 1...50)
                 Stepper("Or every \(settings.prediction.reviewHours) hours when a miss is waiting", value: $settings.prediction.reviewHours, in: 1...48)
                 Stepper("At most \(settings.prediction.dailyCallCap) calls a day", value: $settings.prediction.dailyCallCap, in: 10...300, step: 10)
+                Stepper("New thread after \(settings.prediction.threadTurns) calls", value: $settings.prediction.threadTurns, in: 5...200, step: 5)
+                Stepper("Or once a call sends \(settings.prediction.threadTokens / 1000)k tokens", value: $settings.prediction.threadTokens,
+                        in: 10_000...100_000, step: 5_000)
             }
             SwiftUI.Section("How it is doing") {
                 let rates = predictor.rates
@@ -43,7 +48,7 @@ struct PredictionSettings: View {
                 LabeledContent("Misses waiting for review", value: "\(predictor.unreviewedMisses.count)")
                 let usage = PredictionActivity.usageToday(predictor.calls)
                 if usage.isEmpty { LabeledContent("Today", value: "No calls") }
-                ForEach(usage, id: \.model) { LabeledContent($0.model, value: "\($0.calls) calls · \($0.tokens.formatted()) tokens today") }
+                ForEach(usage, id: \.model) { LabeledContent($0.model, value: "\($0.calls) calls · \($0.tokens.formatted()) tokens (\($0.cached.formatted()) cached) today") }
             }
             SwiftUI.Section {
                 HStack {

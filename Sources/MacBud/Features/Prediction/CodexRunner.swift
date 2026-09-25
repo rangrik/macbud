@@ -7,15 +7,21 @@ nonisolated struct ModelCall: Sendable {
     var prompt: String
     var schema: String
     var timeout: Duration
+    /// Store the session so later calls can resume it; `thread` names the one to resume.
+    var keepThread = false
+    var thread: String?
 }
 
 nonisolated struct ModelReply: Sendable {
     var text: String
+    /// On a resumed thread Codex reports the thread's running total, not this turn's.
     var tokens: TokenUsage
+    var thread: String?
 }
 
 nonisolated struct ModelError: LocalizedError, Sendable {
     var message: String
+    var threadGone = false
     var errorDescription: String? { message }
 }
 
@@ -25,8 +31,8 @@ nonisolated protocol ModelRunner: Sendable {
     func run(_ call: ModelCall) async throws -> ModelReply
 }
 
-/// Runs `codex exec` on the owner's own Codex login. `--ephemeral` keeps these runs out of their Codex history
-/// and `--ignore-user-config` keeps their MCP servers and settings out; MacBud keeps its own ledger instead.
+/// Runs `codex exec` on MacBud's own Codex login when signed in, else ephemerally on the owner's, so nothing lands
+/// in their Codex history. `--ignore-user-config` keeps their MCP servers and settings out.
 actor CodexRunner: ModelRunner {
     private var located: (executable: URL, path: String)?
     private var lastLookup = Date.distantPast
@@ -35,6 +41,10 @@ actor CodexRunner: ModelRunner {
     private nonisolated static let disabledFeatures = ["apps", "browser_use", "computer_use", "goals", "hooks", "image_generation",
                                                        "memories", "multi_agent", "plugins", "shell_tool", "skill_search",
                                                        "tool_suggest", "unified_exec", "view_image"]
+
+    /// MacBud's own Codex login, so its stored sessions never mix with the owner's history.
+    nonisolated static let home = DataStore.default.directory.appendingPathComponent("codex", isDirectory: true)
+    nonisolated static var signedIn: Bool { FileManager.default.fileExists(atPath: home.appendingPathComponent("auth.json").path) }
 
     func codexPath() async -> String? { await locate()?.executable.path }
 
@@ -46,19 +56,33 @@ actor CodexRunner: ModelRunner {
         for (name, text) in ["prompt.txt": call.prompt, "schema.json": call.schema, "instructions.md": PredictionPrompts.instructions] {
             try Data(text.utf8).write(to: dir.appendingPathComponent(name))
         }
-        var args = ["exec", "--ephemeral", "--ignore-user-config", "--skip-git-repo-check", "-s", "read-only",
-                    "-m", call.model, "-c", "model_reasoning_effort=\(call.effort)",
-                    "-c", "model_instructions_file=\"\(dir.appendingPathComponent("instructions.md").path)\"",
-                    "-c", "include_environment_context=false", "-c", "include_permissions_instructions=false",
-                    "-c", "web_search=disabled"]
+        let own = Self.signedIn, keep = call.keepThread && own
+        let resume = keep ? call.thread : nil
+        if call.thread != nil, !keep { throw ModelError(message: "MacBud's Codex sign-in is gone", threadGone: true) }
+        var args = ["exec"] + (resume == nil ? [] : ["resume"]) + (keep ? [] : ["--ephemeral"])
+        args += ["--ignore-user-config", "--skip-git-repo-check", "-c", "sandbox_mode=\"read-only\"",
+                 "-m", call.model, "-c", "model_reasoning_effort=\(call.effort)",
+                 "-c", "model_instructions_file=\"\(dir.appendingPathComponent("instructions.md").path)\"",
+                 "-c", "include_environment_context=false", "-c", "include_permissions_instructions=false",
+                 "-c", "web_search=disabled"]
         args += Self.disabledFeatures.flatMap { ["-c", "features.\($0)=false"] }
-        args += ["--output-schema", dir.appendingPathComponent("schema.json").path, "--json", "-"]
+        args += ["--output-schema", dir.appendingPathComponent("schema.json").path, "--json"] + (resume.map { [$0] } ?? []) + ["-"]
         var env = ProcessInfo.processInfo.environment
         env["PATH"] = codex.path
-        let result = try await Self.execute(codex.executable, args, env: env, cwd: dir, input: dir.appendingPathComponent("prompt.txt"),
-                                            timeout: call.timeout)
+        if own { env["CODEX_HOME"] = Self.home.path }
+        // A fixed folder for kept threads, so every turn of a thread runs in the same place.
+        let result = try await Self.execute(codex.executable, args, env: env, cwd: keep ? Self.home : dir,
+                                            input: dir.appendingPathComponent("prompt.txt"), timeout: call.timeout)
         if result.timedOut { throw ModelError(message: "Timed out after \(call.timeout)") }
-        return try Self.parse(result.out, stderr: result.err)
+        do {
+            var reply = try Self.parse(result.out, stderr: result.err)
+            if !keep { reply.thread = nil }  // an ephemeral thread cannot be resumed
+            return reply
+        } catch var error as ModelError {
+            // A resume that never reports its thread could not open it: the session is gone.
+            error.threadGone = resume != nil && result.out.range(of: Data(#""thread.started""#.utf8)) == nil
+            throw error
+        }
     }
 
     /// GUI apps do not get the owner's shell PATH, so ask their login shell once, like their terminal would.
@@ -108,10 +132,12 @@ actor CodexRunner: ModelRunner {
 
     /// Reads `codex exec --json` events: the last agent message is the reply, `turn.completed` has the tokens.
     nonisolated static func parse(_ out: Data, stderr: Data) throws -> ModelReply {
-        var text: String?, failure: String?, tokens = TokenUsage()
+        var text: String?, thread: String?, failure: String?, tokens = TokenUsage()
         for line in out.split(separator: UInt8(ascii: "\n")) {
             guard let event = try? JSONSerialization.jsonObject(with: Data(line)) as? [String: Any] else { continue }
             switch event["type"] as? String {
+            case "thread.started":
+                thread = event["thread_id"] as? String
             case "item.completed":
                 if let item = event["item"] as? [String: Any], item["type"] as? String == "agent_message" { text = item["text"] as? String }
             case "turn.completed":
@@ -125,7 +151,7 @@ actor CodexRunner: ModelRunner {
             default: break
             }
         }
-        if let text { return ModelReply(text: text, tokens: tokens) }
+        if let text { return ModelReply(text: text, tokens: tokens, thread: thread) }
         let lastError = String(decoding: stderr, as: UTF8.self).split(separator: "\n").last.map(String.init)
         throw ModelError(message: readable(failure ?? lastError ?? "Codex gave no reply"))
     }

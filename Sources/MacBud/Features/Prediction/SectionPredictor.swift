@@ -22,9 +22,12 @@ final class SectionPredictor {
     private(set) var lastReview: Date?
     private(set) var isBusy = false
     private(set) var codexPath: String?
+    private(set) var thread: DriverThread?
+    @ObservationIgnored private var events: [EventRecord] = []
     @ObservationIgnored private var cache: [String: ModelPick] = [:]
     @ObservationIgnored private var open: SessionRecord?
     @ObservationIgnored private var lastKey = ""
+    @ObservationIgnored private var lastAges: [Int?] = []
     @ObservationIgnored private var nextCall = Date.distantPast
     @ObservationIgnored private var nextReview = Date.distantPast
     @ObservationIgnored private var timer: Timer?
@@ -39,6 +42,8 @@ final class SectionPredictor {
     func start() async {
         sessions = Array(await memory.lines(SessionRecord.self, in: "predictions.jsonl").suffix(500))
         calls = Array(await memory.lines(CallRecord.self, in: "calls.jsonl").suffix(300))
+        events = Array(await memory.lines(EventRecord.self, in: "events.jsonl").suffix(200))
+        thread = await memory.lines(DriverThread.self, in: "driver.jsonl").last
         let saved = await memory.text("strategies.md")
         strategies = saved?.text ?? ""
         lastReview = saved?.modified
@@ -54,9 +59,18 @@ final class SectionPredictor {
     private func tick() {
         guard settings.prediction.enabled else { return }
         let context = capture()
+        // A younger item means a new one arrived, even when the key stays the same; log it so the driver hears of it.
+        let ages = [context.clipboardAge, context.screenshotAge, context.dictationAge]
+        let newItem = zip(ages, lastAges).contains { ($0 ?? .max) < ($1 ?? .max) }
+        lastAges = ages
+        if context.key != lastKey || newItem {
+            let event = EventRecord(t: .now, context: context)
+            events.append(event)
+            if events.count > 200 { events.removeFirst(events.count - 200) }
+            Task { await memory.appendLine(event, to: "events.jsonl") }
+        }
         guard context.key == lastKey else {
             lastKey = context.key
-            Task { await memory.appendLine(EventRecord(t: .now, context: context), to: "events.jsonl") }
             return
         }
         if fresh(cache[context.key]) == nil { Task { await refresh(context) } }
@@ -108,17 +122,24 @@ final class SectionPredictor {
     // MARK: Model calls
 
     /// Asks the driver about `context` and caches its pick for that context key.
+    /// A kept thread gets only what changed since its last turn; a new one gets the whole instruction.
     func refresh(_ context: PredictionContext) async {
         guard await mayCall(after: nextCall) else { return }
         defer { isBusy = false }
         let config = settings.prediction
-        let prompt = PredictionPrompts.driver(context: context, strategies: strategies,
-                                              recent: Array(sessions.filter { $0.hit != nil }.suffix(15)))
+        let resume = DriverThread.resumable(thread, model: config.driverModel, maxTurns: config.threadTurns, maxTokens: config.threadTokens)
+        let prompt = resume.map {
+            PredictionPrompts.delta(context: context, since: $0.lastCall, sessions: sessions, events: events, strategies: strategies,
+                                    written: lastReview)
+        } ?? PredictionPrompts.driver(context: context, strategies: strategies, recent: Array(sessions.filter { $0.hit != nil }.suffix(15)))
         let reply = await call(ModelCall(purpose: "driver", model: config.driverModel, effort: config.driverEffort, prompt: prompt,
-                                         schema: PredictionPrompts.driverSchema(context.kinds), timeout: .seconds(30))) {
+                                         schema: PredictionPrompts.driverSchema(context.kinds), timeout: .seconds(30),
+                                         keepThread: true, thread: resume?.id)) {
             DriverReply.parse($0, kinds: context.kinds)
         }
-        nextCall = .now + (reply == nil ? 300 : 20)
+        // A lost thread is not an outage: start a new one on the next call.
+        let lost = resume != nil && thread == nil
+        nextCall = .now + (reply != nil || lost ? 20 : 300)
         guard let reply else { return }
         cache[context.key] = ModelPick(intent: LandingIntent(kind: reply.kind, hint: reply.hint, confidence: min(max(reply.confidence, 0), 1)),
                                        note: String(reply.note.prefix(300)), key: context.key, madeAt: .now)
@@ -171,19 +192,31 @@ final class SectionPredictor {
         do {
             let reply = try await runner.run(call)
             record.reply = reply.text
-            record.tokens = reply.tokens
+            record.tokens = reply.tokens - (call.thread == nil ? TokenUsage() : thread?.total ?? TokenUsage())
+            if call.keepThread, let id = reply.thread {
+                let next = DriverThread(id: id, model: call.model, turns: (call.thread == nil ? 0 : thread?.turns ?? 0) + 1,
+                                        size: record.tokens?.input ?? 0, total: reply.tokens, lastCall: started)
+                thread = next
+                record.thread = id
+                record.turn = next.turns
+                await memory.appendLine(next, to: "driver.jsonl")
+            }
             result = parse(reply.text)
             if result == nil { record.status = "unusable"; record.error = "Reply did not match the schema" }
         } catch {
             record.status = "failed"
             record.error = error.localizedDescription
+            if (error as? ModelError)?.threadGone == true {
+                thread = nil
+                await memory.remove(["driver.jsonl"])
+            }
         }
         record.ms = Int(Date.now.timeIntervalSince(started) * 1000)
         calls.append(record)
         if calls.count > 300 { calls.removeFirst(calls.count - 300) }
         await memory.appendLine(record, to: "calls.jsonl")
         status = record.error.map { .failed($0) } ?? .ready
-        Trace.log("predict call \(call.purpose) \(record.status) \(record.ms)ms input=\(record.tokens?.input ?? 0)")
+        Trace.log("predict call \(call.purpose) \(record.status) \(record.ms)ms input=\(record.tokens?.input ?? 0) cached=\(record.tokens?.cached ?? 0) thread=\(record.thread ?? "-") turn=\(record.turn ?? 0)")
         return result
     }
 
@@ -211,7 +244,9 @@ final class SectionPredictor {
         strategies = ""
         lastReview = nil
         open = nil
-        await memory.remove(["events.jsonl", "predictions.jsonl", "strategies.md"])
+        events = []
+        thread = nil
+        await memory.remove(["events.jsonl", "predictions.jsonl", "strategies.md", "driver.jsonl"])
     }
 
     func dump() -> [String: Any] {
@@ -219,7 +254,7 @@ final class SectionPredictor {
         return ["status": String(describing: status), "busy": isBusy, "cached": cache.count, "key": capture().key,
                 "sessions": sessions.count, "unreviewedMisses": unreviewedMisses.count, "callsToday": callsToday,
                 "strategyLines": strategies.split(separator: "\n").count, "lastReview": lastReview?.ISO8601Format() ?? "",
-                "last": last ?? [:]]
+                "thread": thread?.id ?? "", "threadTurns": thread?.turns ?? 0, "threadSize": thread?.size ?? 0, "last": last ?? [:]]
     }
 }
 
@@ -229,5 +264,23 @@ nonisolated enum ReviewTrigger {
         guard misses > 0 else { return false }
         guard misses < threshold else { return true }
         return since.map { now.timeIntervalSince($0) >= Double(hours) * 3600 } ?? false
+    }
+}
+
+/// The driver's Codex thread. The last line of `driver.jsonl`, so a relaunch resumes it.
+nonisolated struct DriverThread: Codable, Equatable, Sendable {
+    var id: String
+    var model: String
+    var turns = 1
+    /// Input tokens of the last turn: about what the thread holds now.
+    var size = 0
+    /// Codex's running total, so the next turn's own usage is the difference.
+    var total = TokenUsage()
+    var lastCall: Date
+
+    /// A long thread costs more per turn than a new one saves, so past either limit the driver starts over.
+    static func resumable(_ thread: DriverThread?, model: String, maxTurns: Int, maxTokens: Int) -> DriverThread? {
+        guard let thread, thread.model == model, thread.turns < maxTurns, thread.size < maxTokens else { return nil }
+        return thread
     }
 }

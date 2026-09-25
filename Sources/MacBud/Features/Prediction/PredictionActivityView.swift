@@ -94,7 +94,7 @@ struct PredictionActivityView: View {
                     Text("Today").font(.caption.bold()).foregroundStyle(.secondary)
                     let usage = PredictionActivity.usageToday(predictor.calls)
                     if usage.isEmpty { Text("No calls") }
-                    ForEach(usage, id: \.model) { Text("\($0.model): \($0.calls) calls · \($0.tokens) tokens") }
+                    ForEach(usage, id: \.model) { Text("\($0.model): \($0.calls) calls · \($0.tokens) tokens (\($0.cached) cached)") }
                 }
                 VStack(alignment: .leading, spacing: 3) {
                     Text("Last 7 days").font(.caption.bold()).foregroundStyle(.secondary)
