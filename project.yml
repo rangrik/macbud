@@ -32,8 +32,8 @@ targets:
       properties:
         CFBundleDisplayName: MacBud
         CFBundleName: MacBud
-        CFBundleShortVersionString: "0.8.1"
-        CFBundleVersion: "14"
+        CFBundleShortVersionString: "0.8.2"
+        CFBundleVersion: "15"
         LSUIElement: true
         LSMinimumSystemVersion: "26.0"
         LSApplicationCategoryType: public.app-category.productivity
