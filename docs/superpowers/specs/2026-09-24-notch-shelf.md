@@ -33,7 +33,8 @@ Everything is pure black and grows out of the notch; nothing is drawn under the 
   not its transparent margin, and never while a toast shows or dictation runs. A hover-opened shelf never takes
   focus: the mouse works, the keyboard stays with your app. Leaving the shelf closes it after 400 ms.
 - **Click** the tab, or tap the **toggle hotkey**: the shelf opens and takes keys the way the island does today.
-  The hotkey on a hover-opened shelf gives it the keys; on a focused shelf or the island it closes.
+  A click on the notch or the hotkey gives a hover-opened shelf the keys; on a focused shelf or the island the
+  hotkey closes it. A focused shelf closes on ⎋, the hotkey, or a click elsewhere, not when the pointer leaves.
 - **Hold to peek:** hold the hotkey for more than 350 ms and let go; the shelf closes on release unless you
   expanded it meanwhile.
 - **Per-chip global hotkeys** and menu items open straight into expanded on that chip. They are not scored.
@@ -46,6 +47,7 @@ Everything is pure black and grows out of the notch; nothing is drawn under the 
 | ↑ ↓ | ↓ expands onto the first Earlier row | move through Recent and Earlier |
 | ↩ / ⌘↩ | primary / other action (the `enterAction` setting picks copy or paste) | same |
 | ⇥ ⇧⇥ ⌘1…⌘8 | expand, then as expanded | cycle chips (wrapping, skipping hidden ones) / jump to chip N |
+| ⌘S ⌘N ⌘E ⌘⇧⌫ | expand keeping the card, then as expanded | open the snippet editor / ask to clear clipboard history |
 | typing | expands and starts the search | search |
 | ⎋ | close | cancel the snippet editor, else close |
 

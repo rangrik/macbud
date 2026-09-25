@@ -9,7 +9,10 @@ struct ShelfView: View {
         let shelf = coordinator.shelf
         let cards = shelf.recents
         VStack(spacing: 0) {
+            // Clicking the notch on a hover-opened shelf is asking for the keyboard, as clicking the closed tab is.
             NotchBand(state: coordinator.state)
+                .contentShape(Rectangle())
+                .onTapGesture { coordinator.notch.focusShelf() }
             if cards.isEmpty {
                 Text("Nothing yet. Copy something, take a screenshot or dictate.")
                     .font(.system(size: 11.5))

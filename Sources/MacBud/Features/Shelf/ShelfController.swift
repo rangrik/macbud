@@ -95,6 +95,7 @@ final class ShelfController {
             guard state.isExpanded else { return true }
             moveInList(command)
         case .clearAll:
+            guard settings.isEnabled(.clipboard) else { return false }
             clipboard.clearAll()
         case .newItem:
             guard settings.isEnabled(.snippets) else { return false }

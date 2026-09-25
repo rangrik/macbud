@@ -17,6 +17,8 @@ final class NotchController {
     private var toastWork: (() -> Void)?
     private var hoverTask: Task<Void, Never>?
     private var leaveTask: Task<Void, Never>?
+    /// Set when the notch closes under a resting pointer, so it does not reopen until the pointer leaves.
+    private var hoverNeedsExit = false
     private var observers: [NSObjectProtocol] = []
     private var isSnapshotting = false
 
@@ -139,6 +141,8 @@ final class NotchController {
             performToastAction()
             return
         }
+        // A hover may have opened the shelf while the button was down; the click asks for the keyboard.
+        if state.isShelf, !panel.isKeyWindow { focusShelf(); return }
         if state.isOpen { close() } else { onTabClick?(screen) }
     }
 
@@ -146,7 +150,8 @@ final class NotchController {
     private func tabHoverChanged(_ hovering: Bool, on screen: ScreenNotch) {
         state.tabHovered = hovering
         hoverTask?.cancel()
-        guard hovering else { return }
+        if !hovering { hoverNeedsExit = false }
+        guard hovering, !hoverNeedsExit else { return }
         let started = ContinuousClock.now
         hoverTask = Task { [weak self] in
             try? await Task.sleep(for: HoverDwell.delay)
@@ -158,7 +163,7 @@ final class NotchController {
         }
     }
 
-    /// The shelf closes once the pointer has been on it and then stays off it for a moment.
+    /// A hover-opened shelf closes once the pointer has been on it and then stays off it for a moment.
     /// Polled rather than tracked: a fast exit can skip the enter event a tracking area needs.
     private func watchPointerLeavingShelf() {
         leaveTask?.cancel()
@@ -267,7 +272,7 @@ final class NotchController {
         if focus { panel.makeKey() }
         withAnimation(Self.openAnimation) { state.phase = phase }
         state.wantsSearchFocus = phase == .expanded
-        if phase == .shelf { watchPointerLeavingShelf() }
+        if phase == .shelf, !focus { watchPointerLeavingShelf() }
         Trace.log("open \(phase) took=\(ContinuousClock.now - started) display=\(state.geometry.displayID) key=\(panel.isKeyWindow) firstResponder=\(String(describing: panel.firstResponder))")
     }
 
@@ -287,6 +292,7 @@ final class NotchController {
     /// A shelf opened by hover takes the keyboard only when asked, by the hotkey.
     func focusShelf() {
         guard state.isShelf else { return }
+        leaveTask?.cancel()
         panel.acceptsKeyboardFocus = true
         panel.makeKey()
     }
@@ -294,6 +300,7 @@ final class NotchController {
     func close() {
         guard state.isOpen else { return }
         leaveTask?.cancel()
+        hoverNeedsExit = activeNotch.window.frame.contains(NSEvent.mouseLocation)
         state.wantsSearchFocus = false
         withAnimation(Self.closeAnimation) { state.phase = .collapsed }
         if panel.isKeyWindow { panel.resignKey() }

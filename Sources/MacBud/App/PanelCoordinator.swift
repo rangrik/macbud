@@ -118,6 +118,11 @@ final class PanelCoordinator {
             if focus { prepareToOpen(); notch.open(.expanded, on: screen) }
             return
         }
+        // With only Apps on there is nothing to put on the shelf.
+        if settings.visibleChips == [.apps] {
+            if focus { open(chip: .apps) }
+            return
+        }
         let started = ContinuousClock.now
         prepareToOpen()
         let recents = shelf.recents
@@ -177,6 +182,10 @@ final class PanelCoordinator {
         clipboard.cancelClearAll()
         if snippets.isEditing { snippets.cancelEditing() }
         settingsVisibleAtOpen = Self.settingsWindow != nil
+        // Folder watchers miss subfolders and folders that appear later; the old Screenshots tab rescanned on show.
+        if settings.isEnabled(.screenshots), library.lastScan.map({ Date.now.timeIntervalSince($0) > 30 }) ?? true {
+            library.requestRescan(delay: .zero)
+        }
         state.query = ""
         state.chip = settings.visibleChips.first ?? .all
     }
@@ -276,9 +285,12 @@ final class PanelCoordinator {
         guard state.isShelf || (state.isExpanded && !fieldReady && !showsWelcome && !snippets.isEditing),
               event.modifierFlags.intersection([.command, .control]).isEmpty,
               let text = event.characters, text.contains(where: { !$0.isWhitespace && !$0.isNewline }) || !state.query.isEmpty,
-              text.unicodeScalars.allSatisfy({ !CharacterSet.controlCharacters.contains($0) }) else { return false }
+              // Arrows and function keys arrive as private-use characters.
+              text.unicodeScalars.allSatisfy({ !CharacterSet.controlCharacters.contains($0) && !(0xF700...0xF8FF).contains($0.value) })
+        else { return false }
         expand()
         state.query += text
+        queryChanged()
         return true
     }
 
@@ -307,6 +319,8 @@ final class PanelCoordinator {
             switch command {
             case .moveDown: expand(); return true
             case .nextChip, .previousChip, .selectChip: expand()
+            // These show an editor or a warning the shelf has no room for; the card stays selected.
+            case .newItem, .editItem, .saveAsSnippet, .clearAll: notch.expand()
             default: break
             }
         }
