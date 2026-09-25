@@ -31,7 +31,41 @@ nonisolated enum PredictionPrompts {
         \(json(context))
 
         Pick one kind and a hint. `note`: one short sentence on why, for the reviewer.
+        Later messages here carry only what changed since your last pick; answer each the same way.
         """
+    }
+
+    /// A later turn in the driver's thread: only what happened after `last`.
+    static func delta(context: PredictionContext, since last: Date, sessions: [SessionRecord], events: [EventRecord],
+                      strategies: String, written: Date?) -> String {
+        let news = sessions.filter { $0.hit != nil && $0.t + ($0.secs ?? 0) > last }.map(line) + added(events, since: last)
+        let rewritten = (written ?? .distantPast) > last ? "\n## New strategies from the reviewer (they replace the earlier ones)\n\(strategies)\n" : ""
+        return """
+        ## Since your last pick
+        \(news.isEmpty ? "Nothing new." : news.joined(separator: "\n"))
+        \(rewritten)
+        ## Now
+        Fallback rule would pick: \(context.heuristic.map(describe) ?? "none")
+        \(json(context))
+        """
+    }
+
+    /// Items added after `last`, once each: an item shows up in every event until a newer one replaces it.
+    private static func added(_ events: [EventRecord], since last: Date) -> [String] {
+        var seen: [String: Date] = [:], lines: [(Date, String)] = []
+        for event in events {
+            let c = event.context
+            for (kind, age, text) in [("clip", c.clipboardAge, "copied \(c.clipboardKind ?? "something") from \(c.clipboardSource ?? "an unknown app")"),
+                                      ("shot", c.screenshotAge, c.screenshotKind == "video" ? "saved a screen recording" : "saved a screenshot"),
+                                      ("dictation", c.dictationAge, "dictated")] {
+                guard let age else { continue }
+                let at = event.t - Double(age)
+                guard at > last, abs(at.timeIntervalSince(seen[kind] ?? .distantPast)) > 2 else { continue }
+                seen[kind] = at
+                lines.append((at, at.formatted(.dateTime.hour(.twoDigits(amPM: .omitted)).minute()) + " " + text))
+            }
+        }
+        return lines.sorted { $0.0 < $1.0 }.suffix(20).map(\.1)
     }
 
     static func reviewer(strategies: String, misses: [SessionRecord], hits: [SessionRecord], rates: String) -> String {

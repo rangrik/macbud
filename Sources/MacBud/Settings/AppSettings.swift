@@ -165,5 +165,20 @@ nonisolated struct PredictionConfig: Codable, Equatable, Sendable {
     var missThreshold = 10
     var reviewHours = 12
     var dailyCallCap = 100
+    /// The driver starts a new Codex thread after this many turns, or once a turn's input reaches this many tokens.
+    var threadTurns = 40
+    var threadTokens = 30_000
     static let efforts = ["low", "medium", "high", "xhigh"]
+
+    init() {}
+
+    /// A value saved before a knob existed lacks its key; keep that knob's default instead of resetting them all.
+    init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        func read<T: Decodable>(_ key: CodingKeys, _ value: inout T) throws { value = try c.decodeIfPresent(T.self, forKey: key) ?? value }
+        try read(.enabled, &enabled); try read(.useModel, &useModel); try read(.driverModel, &driverModel)
+        try read(.driverEffort, &driverEffort); try read(.reviewerModel, &reviewerModel); try read(.reviewerEffort, &reviewerEffort)
+        try read(.missThreshold, &missThreshold); try read(.reviewHours, &reviewHours); try read(.dailyCallCap, &dailyCallCap)
+        try read(.threadTurns, &threadTurns); try read(.threadTokens, &threadTokens)
+    }
 }

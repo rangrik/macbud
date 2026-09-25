@@ -74,6 +74,8 @@ file ("Reply with JSON only, matching the schema. You have no tools.") and `--ou
 
 ## Codex CLI
 
+The driver now keeps one Codex thread: see [one Codex session for the driver](2026-09-25-persistent-driver-session.md).
+
 `codex exec --ephemeral --ignore-user-config --skip-git-repo-check -s read-only -m <model>
 -c model_reasoning_effort=<effort> -c model_instructions_file=… -c include_environment_context=false
 -c include_permissions_instructions=false -c web_search=disabled -c features.<tool>=false … --output-schema

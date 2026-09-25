@@ -1,4 +1,16 @@
-# Latest update — Prediction Activity window (2026-09-25, 0.8.1)
+# Latest update — one Codex thread for the driver (2026-09-25)
+
+The driver no longer starts a new `--ephemeral` Codex session per call ([spec](superpowers/specs/2026-09-25-persistent-driver-session.md)). It keeps one thread in MacBud's own Codex home (`~/Library/Application Support/MacBud/codex`, signed in once with `CODEX_HOME=… codex login --device-auth`): the first turn sends the whole instruction, later turns (`codex exec resume <id>`) send only `PredictionPrompts.delta`: opens scored since the last turn, items added since (from `events.jsonl`, which now also logs a newer item under the same key), new strategies if the reviewer rewrote them, and the context. `DriverThread` in `driver.jsonl` survives relaunch; `DriverThread.resumable` starts over past 40 turns or 30k input tokens (settings), on a model change, a lost thread (no `thread.started` on resume) or Reset memory. Without MacBud's sign-in, calls stay ephemeral on the owner's login. The reviewer stays ephemeral.
+
+Gotchas: on resume, `turn.completed.usage` is the thread's running total, so `DriverThread.total` is subtracted to log per-turn tokens. Raw input stays ~9.4k a call; the saving is that a kept thread hits the prompt cache every time, where half the old ephemeral calls missed it (mean uncached 4,704 → ~770 a resumed turn). `rtk` filters `cat`/`grep` output and hides comments; read files with the Read tool. Another agent's unit tests write "Nothing was focused" to the pasteboard, which a running MacBud files into the owner's history.
+
+Prediction Activity shows each call's tokens (input, cached, new, output) and its Codex thread and turn; today's usage counts cached tokens apart.
+
+Verification: **135 tests in 25 suites passed** (new seams: delta builder, rotation rule plus old-settings decoding, resume/relaunch/lost thread through the fake runner). Live QA on the Debug app with the real CLI: one thread across calls and a relaunch (turns 1→6, 8,952 → ~9.1–10k input with 7,936–8,960 cached), Review now sent the new strategies into the same thread, a turn limit of 5 started a new thread with the full instruction, Reset memory and a bogus thread id each led to a new thread. The owner's memory folder and settings were restored afterwards; the call ledger was kept.
+
+---
+
+# Previous update — Prediction Activity window (2026-09-25, 0.8.1)
 
 The owner could not find the call list at the bottom of Settings → Prediction. **Prediction Activity** is now its own window, opened from the menu bar, a button at the top of Settings → Prediction, or ⌘L in the island (`BindableCommand.openPredictionActivity`). `PredictionActivity.timeline` merges the predictor's `calls` and `sessions` into rows (driver, reviewer, open, hit, miss, cap, error), newest first; an open links to the driver call behind its pick by `madeAt`. `details` builds each row's sections, the reviewer diff and the Markdown export from the same data. The window reads the observable predictor, so new calls appear live. Settings → Prediction lost Strategies, Recent opens and Activity; the numbers stay and use the same `usageToday`.
 

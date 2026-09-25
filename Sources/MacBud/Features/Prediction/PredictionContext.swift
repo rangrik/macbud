@@ -75,6 +75,10 @@ nonisolated struct SessionRecord: Codable, Identifiable, Sendable {
 
 nonisolated struct TokenUsage: Codable, Equatable, Sendable {
     var input = 0, cached = 0, output = 0, reasoning = 0
+
+    static func - (a: TokenUsage, b: TokenUsage) -> TokenUsage {
+        TokenUsage(input: a.input - b.input, cached: a.cached - b.cached, output: a.output - b.output, reasoning: a.reasoning - b.reasoning)
+    }
 }
 
 /// One model call, kept whole so the owner can read exactly what was sent and received.
@@ -89,6 +93,9 @@ nonisolated struct CallRecord: Codable, Identifiable, Sendable {
     var tokens: TokenUsage?
     var prompt: String
     var reply: String?
+    /// The driver's Codex thread and its turn number; nil for a call that kept no thread.
+    var thread: String?
+    var turn: Int?
     var id: Date { t }
 }
 

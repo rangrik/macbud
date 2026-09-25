@@ -88,9 +88,11 @@ nonisolated enum PredictionActivity {
     private static func id(of call: CallRecord) -> String { "call \(call.t.timeIntervalSince1970)" }
 
     /// Calls and tokens per model today; Settings and the Activity window show the same numbers.
-    static func usageToday(_ calls: [CallRecord]) -> [(model: String, calls: Int, tokens: Int)] {
+    /// Cached input is counted apart because it is billed at a fraction of the rest.
+    static func usageToday(_ calls: [CallRecord]) -> [(model: String, calls: Int, tokens: Int, cached: Int)] {
         Dictionary(grouping: calls.filter { Calendar.current.isDateInToday($0.t) }, by: \.model)
-            .map { ($0.key, $0.value.count, $0.value.reduce(0) { $0 + ($1.tokens?.input ?? 0) + ($1.tokens?.output ?? 0) }) }
+            .map { ($0.key, $0.value.count, $0.value.reduce(0) { $0 + ($1.tokens?.input ?? 0) + ($1.tokens?.output ?? 0) },
+                    $0.value.reduce(0) { $0 + ($1.tokens?.cached ?? 0) }) }
             .sorted { $0.model < $1.model }
     }
 
@@ -117,6 +119,10 @@ nonisolated enum PredictionActivity {
             return out
         }
         if let error = c.error { out.append(ActivityDetail(title: "Error", text: error)) }
+        if let t = c.tokens {
+            out.append(ActivityDetail(title: "Tokens", text: "\(t.input.formatted()) in (\(t.cached.formatted()) cached, \((t.input - t.cached).formatted()) new) · \(t.output.formatted()) out"))
+        }
+        if let thread = c.thread { out.append(ActivityDetail(title: "Codex thread", text: "\(thread), turn \(c.turn ?? 1)")) }
         let reply = (try? JSONSerialization.jsonObject(with: Data((c.reply ?? "").utf8))) as? [String: Any] ?? [:]
         if let note = reply["note"] as? String { out.append(ActivityDetail(title: "Driver's note", text: note)) }
         if c.purpose == "driver" {
