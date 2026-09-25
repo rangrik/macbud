@@ -141,7 +141,8 @@ final class SectionPredictor {
         let lost = resume != nil && thread == nil
         nextCall = .now + (reply != nil || lost ? 20 : 300)
         guard let reply else { return }
-        cache[context.key] = ModelPick(intent: LandingIntent(kind: reply.kind, hint: reply.hint, confidence: min(max(reply.confidence, 0), 1)),
+        let app = reply.kind == .app && reply.app?.isEmpty == false ? reply.app : nil
+        cache[context.key] = ModelPick(intent: LandingIntent(kind: reply.kind, hint: reply.hint, confidence: min(max(reply.confidence, 0), 1), app: app),
                                        note: String(reply.note.prefix(300)), key: context.key, madeAt: .now)
         if cache.count > 20, let oldest = cache.min(by: { $0.value.madeAt < $1.value.madeAt })?.key { cache[oldest] = nil }
     }

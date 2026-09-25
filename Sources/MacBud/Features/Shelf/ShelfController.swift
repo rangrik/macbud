@@ -9,19 +9,23 @@ final class ShelfController {
     let screenshots: ScreenshotsSectionController
     let dictations: DictationHistorySectionController
     let snippets: SnippetsSectionController
+    let apps: AppsSectionController
+    /// The app or window a prediction put first on the shelf, until the next open.
+    var suggested: AppEntry?
     /// By item id, so a list that changes underneath keeps the selection.
     var selectedID: String?
     @ObservationIgnored private var merged: (key: Inputs, items: [ShelfItem])?
     @ObservationIgnored private var laidOut: (key: LayoutKey, cards: [ShelfItem], rows: [ShelfItem])?
 
     init(state: NotchState, settings: AppSettings, clipboard: ClipboardSectionController, screenshots: ScreenshotsSectionController,
-         dictations: DictationHistorySectionController, snippets: SnippetsSectionController) {
+         dictations: DictationHistorySectionController, snippets: SnippetsSectionController, apps: AppsSectionController) {
         self.state = state
         self.settings = settings
         self.clipboard = clipboard
         self.screenshots = screenshots
         self.dictations = dictations
         self.snippets = snippets
+        self.apps = apps
     }
 
     // MARK: What is shown
@@ -32,7 +36,7 @@ final class ShelfController {
     }
 
     private struct LayoutKey: Equatable {
-        var items: [ShelfItem], chip: Chip, query: String
+        var items: [ShelfItem], apps: [AppEntry], lead: AppEntry?, chip: Chip, query: String
     }
 
     /// Every visible item, newest first. Rebuilt only when a store or a feature toggle changes.
@@ -46,13 +50,15 @@ final class ShelfController {
         return items
     }
 
-    var recents: [ShelfItem] { Shelf.recents(items) }
+    var recents: [ShelfItem] { Shelf.recents(items, lead: suggested) }
 
     /// The island's Recent row and list for the current chip and query.
     var layout: (cards: [ShelfItem], rows: [ShelfItem]) {
-        let key = LayoutKey(items: items, chip: state.chip, query: state.query)
+        // Windows and apps only join a search, so the list is not built for every open.
+        let pool = state.query.isEmpty || !settings.visibleKinds.contains(.app) ? [] : apps.pool(titled: true)
+        let key = LayoutKey(items: items, apps: pool, lead: suggested, chip: state.chip, query: state.query)
         if let laidOut, laidOut.key == key { return (laidOut.cards, laidOut.rows) }
-        let layout = Shelf.layout(key.items, chip: key.chip, query: key.query)
+        let layout = Shelf.layout(key.items, apps: key.apps, lead: key.lead, chip: key.chip, query: key.query)
         laidOut = (key, layout.cards, layout.rows)
         return layout
     }
@@ -129,6 +135,7 @@ final class ShelfController {
         case .media(let media): screenshots.handle(command, on: media)
         case .dictation(let dictation): dictations.handle(command, on: dictation)
         case .snippet(let snippet): snippets.handle(command, on: snippet)
+        case .app(let entry): apps.handle(command, on: entry)
         }
         if handled, command == .delete { selectedID = neighbour?.id }
         return handled
@@ -177,7 +184,8 @@ final class ShelfController {
         case .media(let media): .screenshot(media, among: screenshots.library.items)
         case .dictation(let dictation): .dictation(dictation, among: dictations.store.items)
         case .snippet: Outcome(kind: .snippet)
-        case nil: nil
+        // A switch reports itself, and nothing else acts on an app.
+        case .app, nil: nil
         }
     }
 }

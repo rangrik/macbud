@@ -1,3 +1,13 @@
+# Latest update — windows and apps in All, and an app card on the shelf (2026-09-25, 0.8.3)
+
+A search under All now ranks open windows and installed apps with the Apps chip's scoring (`AppsSectionController.rank`) and merges them into the results as `ShelfItem.app`; ↩ switches or opens, and the preview is the Apps window preview. Windows are read once per open, on the first search (`loadAppsForSearch`). An `app` intent that names a bundle id, or says `newest`, puts that app's front window first on the shelf with the ring (`AppsSectionController.suggestion`, `Shelf.recents(lead:)`); any other `app` intent still opens Apps. The driver context gains `previousApp` and `runningApps` (bundle ids, at most 8), its reply an `app` field, and outcomes record the app used, so a named app scores a hit only when that app is used.
+
+Gotcha: selecting a window row asks for Screen Recording the first time a preview is wanted, as the Apps chip always has; in QA that system prompt took focus and closed the island once. A plain open with an `app` intent reads every window, about 45–80 ms against a few ms otherwise.
+
+Verification: **135 tests in 25 suites passed**. Live QA on the Debug build through `mbctl`: "30 notes" under All put the Notes window first with its icon and a live preview, and ↩ switched to it (`actedIn: all`, a correct miss against a Finder pick); the driver, told by a temporary strategy to name `previousApp`, answered `app: sh.paseo.desktop`, the shelf showed Paseo's front window first with the ring, and ↩ switched to it (`actedIn: shelf`, hit). QA sessions, the temporary strategy and the driver thread that saw it were removed afterwards.
+
+---
+
 # Latest update — one Codex thread for the driver (2026-09-25)
 
 The driver no longer starts a new `--ephemeral` Codex session per call ([spec](superpowers/specs/2026-09-25-persistent-driver-session.md)). It keeps one thread in MacBud's own Codex home (`~/Library/Application Support/MacBud/codex`, signed in once with `CODEX_HOME=… codex login --device-auth`): the first turn sends the whole instruction, later turns (`codex exec resume <id>`) send only `PredictionPrompts.delta`: opens scored since the last turn, items added since (from `events.jsonl`, which now also logs a newer item under the same key), new strategies if the reviewer rewrote them, and the context. `DriverThread` in `driver.jsonl` survives relaunch; `DriverThread.resumable` starts over past 40 turns or 30k input tokens (settings), on a model change, a lost thread (no `thread.started` on resume) or Reset memory. Without MacBud's sign-in, calls stay ephemeral on the owner's login. The reviewer stays ephemeral.

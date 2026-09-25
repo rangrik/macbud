@@ -33,6 +33,8 @@ final class PanelCoordinator {
     @ObservationIgnored private var settingsVisibleAtOpen = false
     /// When the toggle hotkey opened the shelf, so letting go after a hold can close it again.
     @ObservationIgnored private var peekStarted: ContinuousClock.Instant?
+    /// Whether this open has read the windows All searches.
+    @ObservationIgnored private var appsLoaded = false
     static let peekHold: Duration = .milliseconds(350)
 
     init(state: NotchState, notch: NotchController, settings: AppSettings,
@@ -54,15 +56,16 @@ final class PanelCoordinator {
         dictationHistory = DictationHistorySectionController(store: dictationHistoryStore, context: context, snippets: snippets)
         dictation = DictationController(settings: settings, context: context, clipboard: clipboardStore,
                                         history: dictationHistoryStore, words: dictationWordStore)
-        shelf = ShelfController(state: state, settings: settings, clipboard: clipboard, screenshots: screenshots,
-                                dictations: dictationHistory, snippets: snippets)
         let previews = WindowPreviewCache()
         windowPreviews = previews
         apps = AppsSectionController(index: appIndex, context: context, previews: previews)
+        shelf = ShelfController(state: state, settings: settings, clipboard: clipboard, screenshots: screenshots,
+                                dictations: dictationHistory, snippets: snippets, apps: apps)
         predictor = SectionPredictor(settings: settings, memory: DataStore(directory: snippetStore.dataStore.directory.appendingPathComponent("predict")),
                                      runner: runner) { [dictationHistoryStore] in
             PredictionContext.capture(clipboard: clipboardStore.items, media: library.items, dictations: dictationHistoryStore.items,
-                                      app: NSWorkspace.shared.frontmostApplication?.bundleIdentifier, kinds: settings.visibleKinds)
+                                      app: NSWorkspace.shared.frontmostApplication?.bundleIdentifier,
+                                      running: AppIndex.runningInFrontToBackOrder().compactMap(\.bundleIdentifier), kinds: settings.visibleKinds)
         }
         clipboard.snippets = snippets
         context.onUse = { [weak self] action, outcome in
@@ -125,13 +128,15 @@ final class PanelCoordinator {
         }
         let started = ContinuousClock.now
         prepareToOpen()
-        let recents = shelf.recents
         func landing(_ intent: LandingIntent?) -> Landing {
+            shelf.suggested = apps.suggestion(for: intent)
+            let recents = shelf.recents
             let landing = Shelf.landing(for: intent, recents: recents)
             return landing.expanded && !focus ? Landing(card: recents.first?.id) : landing
         }
-        let intent = settings.prediction.enabled ? predictor.intentForOpen { landing($0).place } : nil
-        let landed = landing(intent)
+        // Once only: naming an app reads every open window.
+        var landed = landing(nil)
+        if settings.prediction.enabled { _ = predictor.intentForOpen { landed = landing($0); return landed.place } }
         state.chip = landed.chip
         notch.open(landed.expanded ? .expanded : .shelf, focus: focus, on: screen)
         shelf.select(landed.card)
@@ -188,6 +193,8 @@ final class PanelCoordinator {
         }
         state.query = ""
         state.chip = settings.visibleChips.first ?? .all
+        shelf.suggested = nil
+        appsLoaded = false
     }
 
     /// Global dictation hotkey: start recording; pressing it again while recording delivers the text.
@@ -259,11 +266,18 @@ final class PanelCoordinator {
         state.chip = chip
         state.wantsSearchFocus = true
         context.clearHint()
-        if chip == .apps { apps.didShow() } else { shelf.selectFirstRow() }
+        if chip == .apps { apps.didShow() } else { loadAppsForSearch(); shelf.selectFirstRow() }
     }
 
     func queryChanged() {
-        if state.chip == .apps { apps.queryChanged() } else { shelf.selectFirstRow() }
+        if state.chip == .apps { apps.queryChanged() } else { loadAppsForSearch(); shelf.selectFirstRow() }
+    }
+
+    /// All searches windows too. Reading them is slow, so it waits for the first search of an open.
+    private func loadAppsForSearch() {
+        guard !appsLoaded, state.chip == .all, !state.query.isEmpty, settings.visibleKinds.contains(.app) else { return }
+        appsLoaded = true
+        apps.load()
     }
 
     // MARK: Key handling
@@ -429,30 +443,28 @@ final class PanelCoordinator {
         Hint(keys: keys(for: command), label: label, command: command.panelCommand, systemImage: systemImage)
     }
 
-    /// Return and ⌘Return, labelled for what they do to this kind of item.
-    func useHints(for item: ShelfItem?) -> (primary: Hint, secondary: Hint) {
+    /// Return and ⌘Return, labelled for what they do to this kind of item. Both switch to an app, so it gets one.
+    func useHints(for item: ShelfItem?) -> [Hint] {
+        if case .app(let entry) = item { return [hint(.primaryAction, entry.verb, systemImage: "arrow.up.forward.app")] }
         let app = frontmost.previousAppName ?? "app"
         let paste = item.map { if case .dictation = $0 { "Insert" } else { "Paste to \(app)" } } ?? "Paste to \(app)"
         let copy = hint(.primaryAction, "Copy", systemImage: "doc.on.doc")
         return settings.enterAction == .copy
-            ? (copy, hint(.secondaryAction, paste))
-            : (hint(.primaryAction, paste), hint(.secondaryAction, "Copy", systemImage: "doc.on.doc"))
+            ? [copy, hint(.secondaryAction, paste)]
+            : [hint(.primaryAction, paste), hint(.secondaryAction, "Copy", systemImage: "doc.on.doc")]
     }
 
     func footerHints() -> [Hint] {
         guard hasContent else { return [] }
         if state.chip == .apps {
-            let target = apps.selected
-            let verb = target?.windowID != nil ? "Switch to window" : target?.isRunning == true ? "Switch to app" : "Open app"
-            return [hint(.primaryAction, verb, systemImage: "arrow.up.forward.app"),
+            return [hint(.primaryAction, apps.selected?.verb ?? "Open app", systemImage: "arrow.up.forward.app"),
                     Hint(keys: "↑↓←→", label: "Move", command: nil), hint(.nextChip, "Filter")]
         }
         if snippets.isEditing {
             return [hint(.saveAsSnippet, "Save"), Hint(keys: "⇥", label: "Next field", command: nil), hint(.close, "Cancel")]
         }
         let item = shelf.selected
-        let use = useHints(for: item)
-        var hints = [use.primary, use.secondary]
+        var hints = useHints(for: item)
         switch item {
         case .clip(let clip):
             if clip.kind == .image || clip.kind == .file { hints.append(hint(.quickLook, "Quick Look")) }
@@ -465,6 +477,7 @@ final class PanelCoordinator {
             hints += [hint(.saveAsSnippet, "Snippet"), hint(.delete, "Delete")]
         case .snippet:
             hints += [hint(.editItem, "Edit"), hint(.newItem, "New"), hint(.delete, "Delete")]
+        case .app: break
         case nil:
             if state.chip == .snippets { hints = [hint(.newItem, "New snippet")] } else { hints = [] }
         }

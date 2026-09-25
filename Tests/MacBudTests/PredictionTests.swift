@@ -3,7 +3,8 @@ import Testing
 @testable import MacBud
 
 @MainActor @Suite struct PredictionTests {
-    /// Seam: store items → prompt text. Catches clipboard text, paths, file names or dictation text reaching Codex.
+    /// Seam: store items and outcomes → prompt text. Catches clipboard text, paths, file names, dictation text
+    /// or window titles reaching Codex, and the running apps an `app` pick needs not reaching it.
     @Test func promptsCarryMetadataOnly() {
         let now = Date.now
         let clips = [ClipboardItem(id: UUID(), kind: .text, copiedAt: now - 5, text: "hunter2-token", byteCount: 13,
@@ -13,16 +14,22 @@ import Testing
         let shot = MediaItem(url: URL(fileURLWithPath: "/Users/owner/Private/Screenshot secret.png"), kind: .image,
                              createdAt: now - 20, byteCount: 1, folder: URL(fileURLWithPath: "/Users/owner/Private"))
         let context = PredictionContext.capture(clipboard: clips, media: [shot], dictations: [DictationHistoryItem(text: "my pin is 4321")],
-                                                app: "com.apple.Safari", kinds: IntentKind.allCases, now: now)
+                                                app: "com.apple.Safari", running: ["com.apple.Safari", "com.google.Chrome"],
+                                                kinds: IntentKind.allCases, now: now)
         let rule = LandingIntent(kind: .screenshot, hint: .newest)
         let miss = SessionRecord(t: now, context: context, heuristic: rule, landed: rule, source: "heuristic", opened: "shelf",
                                  outcome: Outcome(kind: .text, newest: true), hit: false)
-        for prompt in [PredictionPrompts.driver(context: context, strategies: "", recent: [miss]),
-                       PredictionPrompts.delta(context: context, since: now - 60, sessions: [miss], events: [EventRecord(t: now, context: context)],
+        let window = AppEntry(bundleID: "com.apple.Preview", name: "Preview", url: URL(fileURLWithPath: "/System/Applications/Preview.app"),
+                              windowID: "w", label: "Layoffs draft.pdf")
+        let switched = SessionRecord(t: now, context: context, heuristic: rule, landed: rule, source: "heuristic", opened: "all",
+                                     outcome: .app(window, switchTarget: nil), hit: false)
+        for prompt in [PredictionPrompts.driver(context: context, strategies: "", recent: [miss, switched]),
+                       PredictionPrompts.delta(context: context, since: now - 60, sessions: [miss, switched], events: [EventRecord(t: now, context: context)],
                                                strategies: "", written: nil),
-                       PredictionPrompts.reviewer(strategies: "", misses: [miss], hits: [], rates: "")] {
-            for secret in ["hunter2", "Private", "Plan.pdf", "secret", "4321"] { #expect(!prompt.contains(secret)) }
+                       PredictionPrompts.reviewer(strategies: "", misses: [miss, switched], hits: [], rates: "")] {
+            for secret in ["hunter2", "Private", "Plan.pdf", "secret", "4321", "Layoffs"] { #expect(!prompt.contains(secret)) }
             #expect(prompt.contains("com.tinyspeck.slackmacgap") && prompt.contains(#""screenshotAge":20"#))
+            #expect(prompt.contains(#""previousApp":"com.google.Chrome""#) && prompt.contains("app com.apple.Preview"))
             #expect(!prompt.contains("dictationHistory") && !prompt.contains("section"), "Prompts must not name today's tabs")
         }
     }

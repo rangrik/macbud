@@ -60,7 +60,7 @@ A click on a card acts; in the list a click selects and a double-click acts. Per
 `All · Text · Links · Images · Screenshots · Dictations · Snippets · Apps`, one fixed order, so ⌘1…⌘8 never move.
 A chip is hidden when its feature is off (Clipboard hides Text, Links and Images; History hides Dictations) and its
 items leave All. ⌘N on a hidden chip does nothing. Search runs `SearchMatcher` over every item the chip allows,
-best match first. All covers items, not apps.
+best match first. With a query, All also ranks open windows and apps, scored as the Apps chip scores them.
 
 Kinds map to chips through `IntentKind`: text → Text, link → Links, image → Images, screenshot → Screenshots,
 dictation → Dictations, snippet → Snippets, app → Apps. Copied files count as text, as prediction already says.
@@ -71,7 +71,8 @@ one card.
 
 `IntentKind.section` becomes `Shelf.landing(for:recents:)`, the one place an intent meets the UI:
 
-- `app` → expanded on Apps; the Apps grid already starts on the app you just left.
+- `app` naming an app, or `newest` → that app's front window (for `newest`, the app you just left) as the first card, with
+  the ring. Any other `app` → expanded on Apps.
 - any other kind → the shelf, with the ring on the first card of that kind (`older`: the second one). No card of
   that kind on the shelf → the ring stays on the newest card.
 - no intent (prediction off) → the shelf, ring on the newest card.

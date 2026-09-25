@@ -48,11 +48,10 @@ struct ShelfHints: View {
     let coordinator: PanelCoordinator
 
     var body: some View {
-        let use = coordinator.useHints(for: coordinator.shelf.selected)
+        let uses = coordinator.useHints(for: coordinator.shelf.selected)
         HStack(spacing: 5) {
             hint("←→", "pick")
-            hint(use.primary.keys, use.primary.label)
-            hint(use.secondary.keys, use.secondary.label)
+            ForEach(uses) { hint($0.keys, $0.label) }
             Button { coordinator.expand() } label: { Text("↓ Search everything") }
                 .buttonStyle(ChipButtonStyle(height: 18, fontSize: 10.5))
             Text("·  ⎋")
@@ -118,7 +117,7 @@ struct ShelfCard: View {
             .overlay(shape.strokeBorder(.white.opacity(isSelected ? 0.9 : 0), lineWidth: 1.5))
             HStack(spacing: 0) {
                 Text(item.source).foregroundStyle(isSelected ? Theme.textPrimary : Theme.textSecondary)
-                Text(" · \(item.date.shortAge)").layoutPriority(1)
+                if item.kind != .app { Text(" · \(item.date.shortAge)").layoutPriority(1) }
             }
             .font(.system(size: 10.5))
             .foregroundStyle(isSelected ? Theme.textSecondary : Theme.textTertiary)
@@ -157,6 +156,7 @@ private struct CardBody: View {
         case .media(let media): CardPicture(load: { await MediaThumbnail.load($0) }, url: media.url)
         case .dictation(let dictation): Excerpt(text: dictation.text)
         case .snippet(let snippet): Excerpt(text: snippet.content)
+        case .app(let entry): Text(entry.displayName).font(.system(size: 11)).foregroundStyle(.white.opacity(0.85)).lineLimit(2)
         }
     }
 }
@@ -248,8 +248,15 @@ struct KindBadge: View {
         case .media(let media): (.screenshots, media.kind == .video ? "video.fill" : "photo.fill")
         case .dictation: (.dictation, "waveform")
         case .snippet: (.snippets, "text.quote")
+        case .app: (.apps, FeatureArt.apps.symbol)
         }
-        FeatureBadge(kind: art, size: size, symbol: symbol)
+        if case .app(let entry) = item {
+            // The icon says which app; the corner badge says it is one to switch to.
+            Image(nsImage: AppIconCache.icon(for: entry.url)).resizable().interpolation(.high).frame(width: size, height: size)
+                .overlay(alignment: .bottomTrailing) { FeatureBadge(kind: art, size: size * 0.5, symbol: symbol).offset(x: 2, y: 2) }
+        } else {
+            FeatureBadge(kind: art, size: size, symbol: symbol)
+        }
     }
 }
 
@@ -389,7 +396,7 @@ struct ItemRow: View {
                 HighlightedText(text: item.title, query: query)
                     .lineLimit(1)
                     .truncationMode(.tail)
-                Text("\(item.source) · \(item.date.relativeDescription)")
+                Text(item.kind == .app ? item.source : "\(item.source) · \(item.date.relativeDescription)")
                     .font(Theme.rowSubtitle)
                     .foregroundStyle(Theme.textTertiary)
                     .lineLimit(1)
@@ -416,6 +423,7 @@ struct ItemPreview: View {
             case .media(let media): MediaPreview(item: media)
             case .dictation(let dictation): DictationPreview(item: dictation)
             case .snippet(let snippet): SnippetPreview(snippet: snippet, controller: coordinator.snippets)
+            case .app(let entry): WindowPreviewPane(entry: entry, controller: coordinator.apps, previews: coordinator.windowPreviews)
             case nil: EmptyState(symbol: "arrow.up.and.down", title: "Select an item", detail: "Use ↑ ↓ to browse.")
             }
         }
@@ -430,6 +438,7 @@ extension ShelfItem {
         case .media(let media): media.folderName
         case .dictation: "Dictation"
         case .snippet: "Snippet"
+        case .app(let entry): entry.windowID != nil ? entry.name : entry.isRunning ? "Open" : "Not open"
         }
     }
 }
