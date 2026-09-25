@@ -248,7 +248,8 @@ final class PanelCoordinator {
     }
 
     static var settingsWindow: NSWindow? {
-        NSApp.windows.first { $0.isVisible && $0.styleMask.contains(.titled) && !($0 is NotchPanel) && !($0 is NotchBaseWindow) }
+        NSApp.windows.first { $0.isVisible && $0.styleMask.contains(.titled) && !($0 is NotchPanel) && !($0 is NotchBaseWindow)
+            && $0.identifier != PredictionActivityWindow.id }
     }
 
     /// Chips filter; they keep the query, so a search can be narrowed after it is typed.
@@ -345,6 +346,10 @@ final class PanelCoordinator {
             if snippets.isEditing { return false }
             openSettings()
             return true
+        case .openPredictionActivity:
+            if snippets.isEditing { return false }
+            openPredictionActivity()
+            return true
         case .startDictation:
             if snippets.isEditing { return false }
             startDictation()
@@ -381,6 +386,11 @@ final class PanelCoordinator {
         } else {
             NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
         }
+    }
+
+    func openPredictionActivity() {
+        notch.close()
+        PredictionActivityWindow.show(predictor: predictor, settings: settings)
     }
 
     private static var settingsMenuItem: (NSMenu, Int)? {

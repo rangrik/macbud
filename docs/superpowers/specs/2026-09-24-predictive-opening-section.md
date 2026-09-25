@@ -108,8 +108,15 @@ reached → heuristics only, with one line in Settings. Never a dialog.
 Toggles "Open on the predicted section" and "Learn with Codex" (kill switch); a status line with the reason.
 Driver and reviewer model and effort, the `codex` path. Numbers: misses before review, hours between reviews,
 daily call cap (100). Last 7 days: hit rate of the model and of the rules. Today: calls and tokens per model.
-The current strategies and when they were written. **Recent opens** (intent, what was used, hit).
-**Activity**: every call with its full prompt and reply. Buttons: Review now, Open memory folder, Reset memory.
+Buttons: Review now, Open memory folder, Reset memory, and at the top **Open Prediction Activity**.
+
+**Prediction Activity** (0.8.1) is where the owner reads what the models did: a window opened from the menu bar,
+that button, or ⌘L in the island. A live timeline, newest first, merges `calls.jsonl` and `predictions.jsonl`:
+driver calls, reviewer runs, opens, hits and misses, errors, and the day the cap was hit. An open links to the
+driver call that made its pick (the last driver call before the pick's `madeAt`, not the one nearest the open).
+Every row expands to its sections with Copy; a reviewer run shows the strategies before (from its prompt) and
+after (from its reply) as a line diff. Filters, a search over summaries, prompts and replies, and Export to one
+Markdown file. The header has today's usage, 7-day hit rates, the strategies and Review now.
 For QA, `Trace` logs pick and open time, and `macbud://dump` has a `prediction` block.
 
 ## Future UI
