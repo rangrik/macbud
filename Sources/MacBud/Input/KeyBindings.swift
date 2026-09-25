@@ -7,7 +7,7 @@ nonisolated enum BindableCommand: String, CaseIterable, Codable, Sendable {
     case primaryAction, secondaryAction
     case delete, clearAll, togglePin, saveAsSnippet, newItem, editItem, revealInFinder, quickLook
     case nextChip, previousChip, selectChip1, selectChip2, selectChip3, selectChip4, selectChip5, selectChip6, selectChip7, selectChip8
-    case startDictation, close, openSettings
+    case startDictation, close, openSettings, openPredictionActivity
 
     var panelCommand: PanelCommand {
         switch self {
@@ -36,6 +36,7 @@ nonisolated enum BindableCommand: String, CaseIterable, Codable, Sendable {
         case .startDictation: .startDictation
         case .close: .close
         case .openSettings: .openSettings
+        case .openPredictionActivity: .openPredictionActivity
         }
     }
 
@@ -66,6 +67,7 @@ nonisolated enum BindableCommand: String, CaseIterable, Codable, Sendable {
         case .startDictation: "Start dictation"
         case .close: "Close"
         case .openSettings: "Open Settings"
+        case .openPredictionActivity: "Open Prediction Activity"
         }
     }
 
@@ -75,7 +77,7 @@ nonisolated enum BindableCommand: String, CaseIterable, Codable, Sendable {
         case .primaryAction, .secondaryAction, .delete, .clearAll, .togglePin, .saveAsSnippet, .newItem, .editItem, .revealInFinder, .quickLook: "Actions"
         case .nextChip, .previousChip, .selectChip1, .selectChip2, .selectChip3, .selectChip4, .selectChip5, .selectChip6,
              .selectChip7, .selectChip8: "Filters"
-        case .startDictation, .close, .openSettings: "General"
+        case .startDictation, .close, .openSettings, .openPredictionActivity: "General"
         }
     }
 
@@ -130,6 +132,7 @@ nonisolated struct KeyBindings: Codable, Equatable, Sendable {
         .startDictation: [key(kVK_ANSI_D, .command)],
         .close: [key(kVK_Escape)],
         .openSettings: [key(kVK_ANSI_Comma, .command)],
+        .openPredictionActivity: [key(kVK_ANSI_L, .command)],
     ])
 
     private enum CodingKeys: String, CodingKey { case chords }

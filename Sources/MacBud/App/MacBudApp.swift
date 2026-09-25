@@ -38,6 +38,7 @@ struct MenuBarMenu: View {
             Toggle("Pause Clipboard Capture", isOn: Binding(get: { app.settings.clipboardPaused }, set: { app.settings.clipboardPaused = $0 }))
         }
         Divider()
+        Button("Prediction Activity…") { app.coordinator.openPredictionActivity() }
         SettingsLink { Text("Settings…") }
             .keyboardShortcut(",", modifiers: .command)
         Button("Quit MacBud") { NSApp.terminate(nil) }

@@ -11,7 +11,7 @@ nonisolated enum PanelCommand: Equatable, Sendable {
     case nextChip, previousChip
     case selectChip(Chip)
     case startDictation
-    case close, openSettings
+    case close, openSettings, openPredictionActivity
 }
 
 /// Maps key events to commands through the user's bindings. Anything unmapped falls through to the text field.
