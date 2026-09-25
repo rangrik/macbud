@@ -19,7 +19,8 @@ import Testing
     }
 
     /// Seam: chip and query → Recent row and list. Catches a chip showing other kinds, a search escaping
-    /// its chip, and a Recent row left up under a chip that empties it or while searching.
+    /// its chip, a Recent row left up under a chip that empties it or while searching, and windows missing
+    /// from All's search, leaking into recents or another chip, or tacked on instead of ranked.
     @Test func chipsScopeTheListAndTheSearch() {
         let items = Shelf.merge(clips: [clip("alpha note", 1), clip("https://alpha.example", 2, kind: .link)] + (3...9).map { clip("older \($0)", Double($0) * 60) },
                                 media: [shot("alpha.png", 5)], dictations: [], snippets: [], kinds: IntentKind.allCases)
@@ -35,10 +36,15 @@ import Testing
         #expect(found.cards.isEmpty)
         #expect(Set(found.rows.map(\.kind)) == [.text, .link, .screenshot])
         #expect(Shelf.layout(items, chip: .links, query: "alpha").rows.map(\.kind) == [.link])
+        let window = AppEntry(bundleID: "com.tinyspeck.slackmacgap", name: "Slack", url: URL(fileURLWithPath: "/Applications/Slack.app"),
+                              isRunning: true, windowID: "slack#1", label: "alpha standup")
+        #expect(Shelf.layout(items, apps: [window], chip: .all, query: "alpha").rows.map(\.kind) == [.app, .screenshot, .text, .link])
+        #expect(Shelf.layout(items, apps: [window], chip: .all, query: "").rows == all.rows)
+        #expect(Shelf.layout(items, apps: [window], chip: .text, query: "alpha").rows.allSatisfy { $0.kind == .text })
     }
 
-    /// Seam: predicted intent → where the UI lands. Catches an app intent stuck on the shelf, an ignored
-    /// `older` hint, and a kind missing from the shelf losing the ring.
+    /// Seam: predicted intent → where the UI lands. Catches an app intent with no app named stuck on the shelf,
+    /// a named app or `newest` window not put first with the ring, an ignored `older` hint, and a lost ring.
     @Test func intentsLandOnTheirChipAndCard() {
         let recents = Shelf.recents(Shelf.merge(clips: [clip("a", 1), clip("b", 3)], media: [shot("s.png", 2)], dictations: [],
                                                 snippets: [], kinds: IntentKind.allCases))
@@ -47,6 +53,13 @@ import Testing
         #expect(Shelf.landing(for: LandingIntent(kind: .text, hint: .older), recents: recents) == Landing(card: recents[2].id))
         #expect(Shelf.landing(for: LandingIntent(kind: .dictation), recents: recents) == Landing(card: recents[0].id))
         #expect(Shelf.landing(for: LandingIntent(kind: .app, hint: .newest), recents: recents) == Landing(chip: .apps, expanded: true))
+        let left = AppEntry(bundleID: "com.google.Chrome", name: "Chrome", url: URL(fileURLWithPath: "/Applications/Chrome.app"), windowID: "chrome#1")
+        let slack = AppEntry(bundleID: "com.tinyspeck.slackmacgap", name: "Slack", url: URL(fileURLWithPath: "/Applications/Slack.app"))
+        #expect(AppsSectionController.pick(LandingIntent(kind: .app, hint: .newest), pool: [left, slack], switchTarget: left) == left)
+        #expect(AppsSectionController.pick(LandingIntent(kind: .app, hint: .newest, app: slack.bundleID), pool: [left, slack], switchTarget: left) == slack)
+        #expect(AppsSectionController.pick(LandingIntent(kind: .app), pool: [left, slack], switchTarget: left) == nil)
+        let led = Shelf.recents(recents, lead: left)
+        #expect(led.first == .app(left) && Shelf.landing(for: LandingIntent(kind: .app), recents: led) == Landing(card: led[0].id))
     }
 
     /// Seam: pointer over the tab → shelf. Catches opening on a pass to the menu bar, over a toast's button,

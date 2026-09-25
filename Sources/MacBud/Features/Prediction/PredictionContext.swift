@@ -5,6 +5,9 @@ nonisolated struct PredictionContext: Codable, Equatable, Sendable {
     var hour: Int
     var weekday: String
     var app: String?
+    /// Bundle ids only, so an `app` pick can name one. Window titles stay out.
+    var previousApp: String?
+    var runningApps: [String]?
     var clipboardKind: String?
     var clipboardSource: String?
     var clipboardAge: Int?
@@ -15,15 +18,17 @@ nonisolated struct PredictionContext: Codable, Equatable, Sendable {
     var kinds: [IntentKind]
 
     static func capture(clipboard: [ClipboardItem], media: [MediaItem], dictations: [DictationHistoryItem],
-                        app: String?, kinds: [IntentKind], now: Date = .now) -> PredictionContext {
+                        app: String?, running: [String] = [], kinds: [IntentKind], now: Date = .now) -> PredictionContext {
         let clip = clipboard.max { $0.copiedAt < $1.copiedAt }
         let shot = media.max { $0.createdAt < $1.createdAt }
         let dictated = dictations.map(\.createdAt).max()
         func age(_ date: Date?) -> Int? { date.map { max(0, Int(now.timeIntervalSince($0))) } }
         let calendar = Calendar.current
+        let running = kinds.contains(.app) ? running : []
         return PredictionContext(hour: calendar.component(.hour, from: now),
                                  weekday: calendar.shortWeekdaySymbols[calendar.component(.weekday, from: now) - 1],
-                                 app: app, clipboardKind: clip?.kind.rawValue, clipboardSource: clip?.sourceBundleID,
+                                 app: app, previousApp: running.first { $0 != app },
+                                 runningApps: running.isEmpty ? nil : Array(running.prefix(8)), clipboardKind: clip?.kind.rawValue, clipboardSource: clip?.sourceBundleID,
                                  clipboardAge: age(clip?.copiedAt), screenshotKind: shot?.kind.rawValue,
                                  screenshotAge: age(shot?.createdAt), dictationAge: age(dictated),
                                  kinds: kinds)

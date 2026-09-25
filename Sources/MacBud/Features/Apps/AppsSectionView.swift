@@ -32,7 +32,7 @@ struct AppsSectionView: View {
                                      onActivate: { controller.activate(grid.items[$0]) })
                         if showsPreview {
                             Rectangle().fill(Theme.separator).frame(width: 1)
-                            WindowPreviewPane(controller: controller, previews: previews)
+                            WindowPreviewPane(entry: controller.selected, controller: controller, previews: previews)
                                 .frame(width: Self.previewWidth)
                         }
                     }
@@ -100,12 +100,12 @@ struct AppGroupView: View {
 /// What is on the window you have selected. Falls back to the app's icon when the picture is not
 /// there yet, was refused, or the window lives on another Space where nothing can photograph it.
 struct WindowPreviewPane: View {
+    let entry: AppEntry?
     let controller: AppsSectionController
     let previews: WindowPreviewCache
 
     var body: some View {
-        let entry = controller.selected
-        let window = controller.selectedWindow
+        let window = controller.window(for: entry)
         let image = window.flatMap { previews.image(for: $0) }
         VStack(alignment: .leading, spacing: 10) {
             ZStack {
@@ -143,7 +143,7 @@ struct WindowPreviewPane: View {
                         .font(.system(size: 12.5, weight: .semibold))
                         .foregroundStyle(Theme.textPrimary)
                         .lineLimit(2)
-                    Text(controller.previewSubtitle)
+                    Text(controller.subtitle(for: entry))
                         .font(.system(size: 11))
                         .foregroundStyle(Theme.textTertiary)
                         .lineLimit(1)

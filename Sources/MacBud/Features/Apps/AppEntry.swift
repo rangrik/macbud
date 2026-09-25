@@ -21,6 +21,8 @@ nonisolated struct AppEntry: Identifiable, Hashable, Sendable {
     var displayName: String { label ?? name }
     /// Both the app name and the window title match, so "chrome" and "inbox" each find the window.
     var searchText: String { label.map { "\(name) \($0)" } ?? name }
+    /// What ↩ does to this tile, for the key hints.
+    var verb: String { windowID != nil ? "Switch to window" : isRunning ? "Switch to app" : "Open app" }
 
     static func == (lhs: AppEntry, rhs: AppEntry) -> Bool { lhs.id == rhs.id }
     func hash(into hasher: inout Hasher) { hasher.combine(id) }

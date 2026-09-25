@@ -30,17 +30,17 @@ final class AppsSectionController {
 
     var query: String { context.state.query }
 
-    var grid: AppGrid { grid(showingPreview: showsPreview) }
+    var grid: AppGrid { grid(showingPreview: showsPreview, query: query) }
 
     /// The pane is up whenever the selection is in Recent, so Recent has to be laid out narrower —
     /// which is itself decided by where the selection is. Resolved by laying the grid out at the
     /// full width first and asking that copy which group the selection landed in.
     var showsPreview: Bool {
         guard query.isEmpty else { return false }
-        return grid(showingPreview: false).groupIndex(of: selectedIndex) == 0
+        return grid(showingPreview: false, query: "").groupIndex(of: selectedIndex) == 0
     }
 
-    private func grid(showingPreview: Bool) -> AppGrid {
+    private func grid(showingPreview: Bool, query: String) -> AppGrid {
         guard query.isEmpty else {
             return AppGrid(groups: [.init(title: "Results", items: searchResults, columns: Self.columns)])
         }
@@ -52,16 +52,16 @@ final class AppsSectionController {
         ])
     }
 
-    /// The window the preview pane is showing, if the selection is one.
-    var selectedWindow: WindowEntry? {
-        selected?.windowID.flatMap { windowsByID[$0] }
+    /// The window the preview pane is showing, if the entry is one.
+    func window(for entry: AppEntry?) -> WindowEntry? {
+        entry?.windowID.flatMap { windowsByID[$0] }
     }
 
     /// The line under the preview: which app, and which of its windows this is. Never repeats the
     /// title above it — a single-window app already says its name there.
-    var previewSubtitle: String {
-        guard let entry = selected else { return "" }
-        guard let window = selectedWindow else { return entry.isRunning ? "Open" : "Not open · Return launches it" }
+    func subtitle(for entry: AppEntry?) -> String {
+        guard let entry else { return "" }
+        guard let window = window(for: entry) else { return entry.isRunning ? "Open" : "Not open · Return launches it" }
         let siblings = windows.filter { $0.bundleID == window.bundleID }
         guard siblings.count > 1, let position = siblings.firstIndex(of: window) else {
             return entry.displayName == entry.name ? "Open" : entry.name
@@ -77,15 +77,15 @@ final class AppsSectionController {
 
     /// An app that exposes no windows still gets its single app tile — Chromium apps hide their
     /// window list, and vanishing from the switcher would be far worse than showing one entry.
-    static func expand(_ running: [AppEntry], windows: [WindowEntry]) -> [AppEntry] {
+    static func expand(_ running: [AppEntry], windows: [WindowEntry], titled: Bool = false) -> [AppEntry] {
         let byApp = Dictionary(grouping: windows, by: \.bundleID)
         return running.flatMap { app -> [AppEntry] in
             guard let open = byApp[app.bundleID], !open.isEmpty else { return [app] }
             return open.map { window in
                 var entry = app
                 entry.windowID = window.id
-                // Only name the window when there is a choice to make between windows.
-                entry.label = open.count > 1 ? window.shortTitle : nil
+                // Only name the window when there is a choice to make between windows, or when asked to.
+                entry.label = titled || open.count > 1 ? window.shortTitle : nil
                 return entry
             }
         }
@@ -123,33 +123,40 @@ final class AppsSectionController {
         return (isRunning ? 60 : 0) + frequency
     }
 
+    /// A name match plus the bonus, best first. All's search scores apps with this too.
+    nonisolated static func rank(_ pool: [AppEntry], query: String) -> [(entry: AppEntry, score: Int)] {
+        let ranked = SearchMatcher.rank(pool, query: query, text: \.searchText).map { result in
+            (entry: result.item, score: result.match.score + rankingBonus(isRunning: result.item.isRunning, useCount: result.item.useCount))
+        }
+        return Array(ranked.sorted { $0.score > $1.score }.prefix(40))
+    }
+
+    /// Open windows, then apps that are not open. `titled` names every window, as All and the shelf need.
+    func pool(titled: Bool) -> [AppEntry] {
+        let open = Self.expand(Self.byLastVisit(index.running), windows: windows, titled: titled)
+        let openApps = Set(open.map(\.bundleID))
+        return open + index.installed.filter { !openApps.contains($0.bundleID) }
+    }
+
     /// Open windows first-class in search too, so typing "chrome" offers both Chrome windows and
     /// typing part of a window title goes straight to that window.
-    private var searchResults: [AppEntry] {
-        let open = openWindows
-        let openApps = Set(open.map(\.bundleID))
-        let pool = open + index.installed.filter { !openApps.contains($0.bundleID) }
-        return SearchMatcher.rank(pool, query: query, text: \.searchText)
-            .map { result -> (entry: AppEntry, score: Int) in
-                var entry = result.item
-                entry.isRunning = openApps.contains(entry.bundleID)
-                return (entry, result.match.score + Self.rankingBonus(isRunning: entry.isRunning, useCount: entry.useCount))
-            }
-            .sorted { $0.score > $1.score }
-            .prefix(40)
-            .map(\.entry)
-    }
+    private var searchResults: [AppEntry] { Self.rank(pool(titled: false), query: query).map(\.entry) }
 
     var selected: AppEntry? {
         let items = grid.items
         return items.indices.contains(selectedIndex) ? items[selectedIndex] : nil
     }
 
-    func didShow() {
+    /// Reads what is open now: the Apps chip on every show, All on its first search of an open.
+    func load() {
         index.refresh()
         windows = WindowIndex.windows()
         previews.clear()
         windowsByID = Dictionary(windows.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+    }
+
+    func didShow() {
+        load()
         // Start on the app you would switch to, not the one you are already in: ⌥⇧A + ↩ jumps back.
         let current = context.frontmost.previousApp?.bundleIdentifier
         selectedIndex = grid.items.firstIndex { $0.bundleID != current } ?? 0
@@ -157,8 +164,24 @@ final class AppsSectionController {
 
     func queryChanged() { selectedIndex = 0 }
 
-    /// The tile `didShow` starts on: the most recent app that is not the one you are in.
-    var switchTarget: AppEntry? { grid.items.first { $0.bundleID != context.frontmost.previousApp?.bundleIdentifier } }
+    /// The tile `didShow` starts on: the most recent app that is not the one you are in. A search does not move it.
+    var switchTarget: AppEntry? {
+        grid(showingPreview: false, query: "").items.first { $0.bundleID != context.frontmost.previousApp?.bundleIdentifier }
+    }
+
+    /// The app or window an `app` intent names, read fresh. Nil when it names none, so the open lands on Apps.
+    func suggestion(for intent: LandingIntent?) -> AppEntry? {
+        guard let intent, intent.kind == .app, intent.app != nil || intent.hint == .newest else { return nil }
+        load()
+        return Self.pick(intent, pool: pool(titled: true), switchTarget: switchTarget)
+    }
+
+    /// A named app wins, as its front window; else `newest` is the window of the app you just left.
+    nonisolated static func pick(_ intent: LandingIntent, pool: [AppEntry], switchTarget: AppEntry?) -> AppEntry? {
+        if let bundleID = intent.app { return pool.first { $0.bundleID == bundleID } }
+        guard intent.hint == .newest, let target = switchTarget else { return nil }
+        return pool.first { $0.id == target.id } ?? target
+    }
 
     func handle(_ command: PanelCommand) -> Bool {
         let grid = grid
@@ -177,6 +200,13 @@ final class AppsSectionController {
         default:
             return false
         }
+        return true
+    }
+
+    /// All and the shelf: ↩ and ⌘↩ both switch, and nothing else applies to an app.
+    func handle(_ command: PanelCommand, on entry: AppEntry) -> Bool {
+        guard command == .primaryAction || command == .secondaryAction else { return false }
+        activate(entry)
         return true
     }
 

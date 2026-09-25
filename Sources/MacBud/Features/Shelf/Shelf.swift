@@ -6,6 +6,8 @@ nonisolated enum ShelfItem: Identifiable, Equatable, Sendable {
     case media(MediaItem)
     case dictation(DictationHistoryItem)
     case snippet(Snippet)
+    /// A window or app: in All's search, or first on the shelf when a prediction names it.
+    case app(AppEntry)
 
     var id: String {
         switch self {
@@ -13,6 +15,7 @@ nonisolated enum ShelfItem: Identifiable, Equatable, Sendable {
         case .media(let media): "media:\(media.url.path)"
         case .dictation(let dictation): "dictation:\(dictation.id)"
         case .snippet(let snippet): "snippet:\(snippet.id)"
+        case .app(let entry): "app:\(entry.id)"
         }
     }
 
@@ -22,6 +25,7 @@ nonisolated enum ShelfItem: Identifiable, Equatable, Sendable {
         case .media(let media): media.createdAt
         case .dictation(let dictation): dictation.createdAt
         case .snippet(let snippet): snippet.updatedAt
+        case .app(let entry): entry.lastUsed ?? .distantPast
         }
     }
 
@@ -31,6 +35,7 @@ nonisolated enum ShelfItem: Identifiable, Equatable, Sendable {
         case .media: .screenshot
         case .dictation: .dictation
         case .snippet: .snippet
+        case .app: .app
         }
     }
 
@@ -40,6 +45,7 @@ nonisolated enum ShelfItem: Identifiable, Equatable, Sendable {
         case .media(let media): media.filename
         case .dictation(let dictation): dictation.text.split(whereSeparator: \.isNewline).first.map(String.init) ?? ""
         case .snippet(let snippet): snippet.name
+        case .app(let entry): entry.displayName
         }
     }
 
@@ -49,6 +55,7 @@ nonisolated enum ShelfItem: Identifiable, Equatable, Sendable {
         case .media(let media): media.filename
         case .dictation(let dictation): dictation.text
         case .snippet(let snippet): snippet.searchText
+        case .app(let entry): entry.searchText
         }
     }
 
@@ -80,27 +87,35 @@ nonisolated enum Shelf {
         return all.filter { kinds.contains($0.kind) }.sorted { $0.date > $1.date }
     }
 
-    /// The newest things made or copied. Snippets are kept, not recent, so they wait in the list.
-    static func recents(_ items: [ShelfItem]) -> [ShelfItem] {
-        Array(items.lazy.filter { $0.kind != .snippet }.prefix(recentCount))
+    /// The newest things made or copied, after the app a prediction names. Snippets are kept, not recent, so they wait in the list.
+    static func recents(_ items: [ShelfItem], lead: AppEntry? = nil) -> [ShelfItem] {
+        let lead = lead.map { [ShelfItem.app($0)] } ?? []
+        return lead + items.lazy.filter { $0.kind != .snippet }.prefix(recentCount - lead.count)
     }
 
-    /// The Recent row and the list under it for a chip. A query searches everything the chip allows, best first.
-    static func layout(_ items: [ShelfItem], chip: Chip, query: String) -> (cards: [ShelfItem], rows: [ShelfItem]) {
+    /// The Recent row and the list under it for a chip. A query searches everything the chip allows, best first;
+    /// under All that includes `apps`, scored as the Apps chip scores them.
+    static func layout(_ items: [ShelfItem], apps: [AppEntry] = [], lead: AppEntry? = nil, chip: Chip,
+                       query: String) -> (cards: [ShelfItem], rows: [ShelfItem]) {
         let scoped = chip == .all ? items : items.filter { $0.kind.chip == chip }
         let query = query.trimmingCharacters(in: .whitespaces)
-        guard query.isEmpty else { return ([], SearchMatcher.rank(scoped, query: query, text: \.searchText).map(\.item)) }
-        let recent = Set(recents(items).map(\.id))
-        let rest = scoped.filter { !recent.contains($0.id) }
-        return (scoped.filter { recent.contains($0.id) }, rest.filter(\.isPinned) + rest.filter { !$0.isPinned })
+        guard query.isEmpty else {
+            let found = SearchMatcher.rank(scoped, query: query, text: \.searchText).map { ($0.item, $0.match.score) }
+            let windows: [(ShelfItem, Int)] = chip == .all ? AppsSectionController.rank(apps, query: query).map { (.app($0.entry), $0.score) } : []
+            return ([], (found + windows).sorted { $0.1 > $1.1 }.map(\.0))
+        }
+        let recent = recents(items, lead: lead).filter { chip == .all || $0.kind.chip == chip }
+        let ids = Set(recent.map(\.id))
+        let rest = scoped.filter { !ids.contains($0.id) }
+        return (recent, rest.filter(\.isPinned) + rest.filter { !$0.isPinned })
     }
 
-    /// The one place an intent meets the UI. Apps are never on the shelf, so they open the island;
-    /// anything else puts the ring on the first card of its kind (`older`: the second).
+    /// The one place an intent meets the UI: the ring goes on the first card of its kind (`older`: the second).
+    /// An app is on the shelf only when the prediction named one; otherwise it opens the island on Apps.
     static func landing(for intent: LandingIntent?, recents: [ShelfItem]) -> Landing {
         guard let intent else { return Landing(card: recents.first?.id) }
-        if intent.kind == .app { return Landing(chip: .apps, expanded: true) }
         let ofKind = recents.filter { $0.kind == intent.kind }
+        if intent.kind == .app, ofKind.isEmpty { return Landing(chip: .apps, expanded: true) }
         let pick = intent.hint == .older && ofKind.count > 1 ? ofKind[1] : ofKind.first
         return Landing(card: (pick ?? recents.first)?.id)
     }

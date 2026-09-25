@@ -11,7 +11,8 @@ nonisolated enum PredictionPrompts {
     ]
 
     static let hints = "Hint: newest = the most recent item of that kind (for app, the window of the app they just left); "
-        + "older = an earlier one they will look for; any = no guess."
+        + "older = an earlier one they will look for; any = no guess. "
+        + "For app you may instead name one app from runningApps by bundle id."
 
     static func driver(context: PredictionContext, strategies: String, recent: [SessionRecord]) -> String {
         """
@@ -30,7 +31,7 @@ nonisolated enum PredictionPrompts {
         Fallback rule would pick: \(context.heuristic.map(describe) ?? "none")
         \(json(context))
 
-        Pick one kind and a hint. `note`: one short sentence on why, for the reviewer.
+        Pick one kind and a hint. `app`: a bundle id for kind app, else "". `note`: one short sentence on why, for the reviewer.
         Later messages here carry only what changed since your last pick; answer each the same way.
         """
     }
@@ -95,18 +96,18 @@ nonisolated enum PredictionPrompts {
     }
 
     static func driverSchema(_ kinds: [IntentKind]) -> String {
-        schema(["kind": ["type": "string", "enum": kinds.map(\.rawValue)],
+        schema(["kind": ["type": "string", "enum": kinds.map(\.rawValue)], "app": ["type": "string"],
                 "hint": ["type": "string", "enum": ItemHint.allCases.map(\.rawValue)],
                 "confidence": ["type": "number"], "note": ["type": "string"]])
     }
 
     static let reviewerSchema = schema(["strategies": ["type": "string"], "summary": ["type": "string"]])
 
-    static func describe(_ intent: LandingIntent) -> String { "\(intent.kind.rawValue)/\(intent.hint.rawValue)" }
+    static func describe(_ intent: LandingIntent) -> String { "\(intent.kind.rawValue)/\(intent.hint.rawValue)" + (intent.app.map { " \($0)" } ?? "") }
 
     private static func line(_ s: SessionRecord) -> String {
         let time = s.t.formatted(.dateTime.weekday(.abbreviated).hour(.twoDigits(amPM: .omitted)).minute())
-        let used = s.outcome.map { $0.kind.rawValue + ($0.newest.map { $0 ? " (newest)" : " (older)" } ?? "") } ?? "nothing"
+        let used = s.outcome.map { $0.kind.rawValue + ($0.app.map { " \($0)" } ?? "") + ($0.newest.map { $0 ? " (newest)" : " (older)" } ?? "") } ?? "nothing"
         return "\(time) · app \(s.context.app ?? "-") · predicted \(describe(s.landed)) by \(s.source == "model" ? "you" : "the fallback rule")"
             + " · rule said \(s.heuristic.map(describe) ?? "-") · used \(used) · \(s.hit.map { $0 ? "hit" : "miss" } ?? "unscored")"
     }
@@ -131,6 +132,7 @@ nonisolated struct DriverReply: Decodable, Sendable {
     var hint: ItemHint
     var confidence: Double
     var note: String
+    var app: String?
 
     /// Nil unless the reply names a kind the owner can reach now.
     static func parse(_ text: String, kinds: [IntentKind]) -> DriverReply? {

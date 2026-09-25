@@ -41,10 +41,13 @@ nonisolated struct LandingIntent: Codable, Equatable, Sendable {
     var kind: IntentKind
     var hint: ItemHint = .any
     var confidence: Double = 1
+    /// For `app`, one app to switch to by bundle id. It beats the hint.
+    var app: String?
 
-    /// A miss is a different kind, or a wrong newest-or-older guess when we know which it was.
+    /// A miss is a different kind, another app than the one named, or a wrong newest-or-older guess when we know which it was.
     func matches(_ outcome: Outcome) -> Bool {
         guard outcome.kind == kind else { return false }
+        if let app { return outcome.app == app }
         guard let newest = outcome.newest, hint != .any else { return true }
         return newest == (hint == .newest)
     }
@@ -54,6 +57,8 @@ nonisolated struct LandingIntent: Codable, Equatable, Sendable {
 nonisolated struct Outcome: Codable, Equatable, Sendable {
     var kind: IntentKind
     var newest: Bool?
+    /// The bundle id, when an app was switched to.
+    var app: String?
 
     static func clip(_ item: ClipboardItem, among items: [ClipboardItem]) -> Outcome {
         let kind = IntentKind(clip: item.kind, source: item.sourceBundleID)
@@ -69,5 +74,7 @@ nonisolated struct Outcome: Codable, Equatable, Sendable {
         Outcome(kind: .dictation, newest: item.id == items.max { $0.createdAt < $1.createdAt }?.id)
     }
 
-    static func app(_ entry: AppEntry, switchTarget: AppEntry?) -> Outcome { Outcome(kind: .app, newest: entry.id == switchTarget?.id) }
+    static func app(_ entry: AppEntry, switchTarget: AppEntry?) -> Outcome {
+        Outcome(kind: .app, newest: entry.id == switchTarget?.id, app: entry.bundleID)
+    }
 }
