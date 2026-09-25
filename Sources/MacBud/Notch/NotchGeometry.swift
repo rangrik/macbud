@@ -51,6 +51,7 @@ nonisolated extension NSScreen {
 
 nonisolated struct NotchMetrics: Equatable, Sendable {
     var islandSize = CGSize(width: 760, height: 500)
+    var shelfSize = CGSize(width: 620, height: 170)
     var toastSize = CGSize(width: 300, height: 76)
     /// Taller toast, for the one that carries a button.
     var actionToastSize = CGSize(width: 430, height: 84)
@@ -76,16 +77,22 @@ nonisolated struct NotchMetrics: Equatable, Sendable {
     var topFillet: CGFloat = 10
     var bottomRadius: CGFloat = 28
     var collapsedBottomRadius: CGFloat = 12
+    var shelfBottomRadius: CGFloat = 22
     var toastBottomRadius: CGFloat = 22
 
-    func expandedWindowFrame(for g: NotchGeometry) -> CGRect {
-        let w = islandSize.width + topFillet * 2
-        return CGRect(x: g.notchCenterX - w / 2, y: g.topY - islandSize.height, width: w, height: islandSize.height)
+    /// The body of the open panel in each phase, without the top fillets.
+    func panelSize(_ phase: NotchPhase) -> CGSize {
+        switch phase {
+        case .shelf: shelfSize
+        case .dictation: dictationSize
+        case .expanded, .collapsed: islandSize
+        }
     }
 
-    func dictationWindowFrame(for g: NotchGeometry) -> CGRect {
-        let w = dictationSize.width + topFillet * 2
-        return CGRect(x: g.notchCenterX - w / 2, y: g.topY - dictationSize.height, width: w, height: dictationSize.height)
+    func panelFrame(_ phase: NotchPhase, for g: NotchGeometry) -> CGRect {
+        let size = panelSize(phase)
+        let w = size.width + topFillet * 2
+        return CGRect(x: g.notchCenterX - w / 2, y: g.topY - size.height, width: w, height: size.height)
     }
 
     func collapsedWindowFrame(for g: NotchGeometry, tab: Bool) -> CGRect {

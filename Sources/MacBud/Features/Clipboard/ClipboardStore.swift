@@ -63,15 +63,6 @@ final class ClipboardStore {
 
     func item(id: UUID) -> ClipboardItem? { items.first { $0.id == id } }
 
-    // MARK: Queries
-
-    /// Pinned first, then newest first; with a query, best match first.
-    func results(for query: String) -> [(item: ClipboardItem, match: SearchMatch)] {
-        let trimmed = query.trimmingCharacters(in: .whitespaces)
-        if trimmed.isEmpty { return items.map { ($0, SearchMatch(score: 0, ranges: [])) } }
-        return SearchMatcher.rank(items, query: trimmed, text: \.searchText)
-    }
-
     func imageURL(for item: ClipboardItem) -> URL? { item.imageFile.map(dataStore.imageURL(named:)) }
     func previewURL(for item: ClipboardItem) -> URL? { (item.previewFile ?? item.imageFile).map(dataStore.imageURL(named:)) }
 

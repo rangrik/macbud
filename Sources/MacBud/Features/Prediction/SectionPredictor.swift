@@ -70,24 +70,26 @@ final class SectionPredictor {
 
     // MARK: Opening and outcome
 
-    /// Where a plain open lands: a fresh model intent for this context, else the heuristic's, as today's tab.
-    func sectionForOpen() -> Section? {
+    /// What a plain open should land on: a fresh model intent for this context, else the heuristic's.
+    /// `opened` says where the UI put it, for the log.
+    func intentForOpen(opened: (LandingIntent) -> String) -> LandingIntent? {
         let started = ContinuousClock.now
         let context = capture()
         let model = fresh(cache[context.key]).flatMap { context.kinds.contains($0.intent.kind) ? $0 : nil }
         guard let landed = model?.intent ?? context.heuristic else { return nil }
         let source = model == nil ? "heuristic" : "model"
+        let place = opened(landed)
         open = SessionRecord(t: .now, context: context, heuristic: context.heuristic, model: model, landed: landed, source: source,
-                             opened: landed.kind.section)
-        Trace.log("predict open=\(landed.kind.section.rawValue) intent=\(PredictionPrompts.describe(landed)) source=\(source) took=\(ContinuousClock.now - started)")
-        return landed.kind.section
+                             opened: place)
+        Trace.log("predict open=\(place) intent=\(PredictionPrompts.describe(landed)) source=\(source) took=\(ContinuousClock.now - started)")
+        return landed
     }
 
     /// The first thing the owner uses decides what they really wanted.
-    func noteAction(_ action: String, outcome: Outcome, in section: Section) {
+    func noteAction(_ action: String, outcome: Outcome, in place: String) {
         guard let started = open?.t, open?.outcome == nil else { return }
         open?.outcome = outcome
-        open?.actedIn = section
+        open?.actedIn = place
         open?.action = action
         open?.secs = (Date.now.timeIntervalSince(started) * 10).rounded() / 10
     }

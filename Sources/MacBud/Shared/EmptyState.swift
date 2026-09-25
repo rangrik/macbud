@@ -28,17 +28,9 @@ struct EmptyState: View {
     }
 }
 
-/// A search result paired with its match, usable in `ForEach`.
-nonisolated struct Ranked<T: Identifiable>: Identifiable {
-    let item: T
-    let match: SearchMatch
-    var id: T.ID { item.id }
-}
-
-/// Icon and display name for a source application, cached.
+/// Display name for a source application, cached.
 enum AppInfo {
     private static var names: [String: String] = [:]
-    private static var icons: [String: NSImage] = [:]
 
     static func name(for bundleID: String?) -> String? {
         guard let bundleID else { return nil }
@@ -47,16 +39,6 @@ enum AppInfo {
         let name = (FileManager.default.displayName(atPath: url.path) as NSString).deletingPathExtension
         names[bundleID] = name
         return name
-    }
-
-    static func icon(for bundleID: String?) -> NSImage? {
-        guard let bundleID else { return nil }
-        if let cached = icons[bundleID] { return cached }
-        guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) else { return nil }
-        let icon = NSWorkspace.shared.icon(forFile: url.path)
-        icon.size = NSSize(width: 16, height: 16)
-        icons[bundleID] = icon
-        return icon
     }
 }
 

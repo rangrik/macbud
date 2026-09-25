@@ -53,11 +53,6 @@ final class DictationHistoryStore {
         save()
     }
 
-    func results(for query: String) -> [DictationHistoryItem] {
-        let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        return query.isEmpty ? items : items.filter { $0.text.localizedStandardContains(query) }
-    }
-
     func flush() async { await saveTask?.value }
 
     private func prune() { items = Array(items.prefix(max(1, limit))) }

@@ -1,6 +1,6 @@
 import AppKit
 
-/// Routes key commands to the active section and owns everything the island's views need.
+/// Opens the shelf and the island, routes key commands, and owns everything their views need.
 @Observable
 final class PanelCoordinator {
     let state: NotchState
@@ -18,6 +18,7 @@ final class PanelCoordinator {
     let dictationHistoryStore: DictationHistoryStore
     let dictationWordStore: DictationWordStore
     let dictationHistory: DictationHistorySectionController
+    let shelf: ShelfController
     let appIndex: AppIndex
     let apps: AppsSectionController
     let windowPreviews: WindowPreviewCache
@@ -30,6 +31,9 @@ final class PanelCoordinator {
     var hotKeys: HotKeyBinder?
     /// Whether Settings was already showing when the island opened (see `didClose`).
     @ObservationIgnored private var settingsVisibleAtOpen = false
+    /// When the toggle hotkey opened the shelf, so letting go after a hold can close it again.
+    @ObservationIgnored private var peekStarted: ContinuousClock.Instant?
+    static let peekHold: Duration = .milliseconds(350)
 
     init(state: NotchState, notch: NotchController, settings: AppSettings,
          clipboardStore: ClipboardStore, snippetStore: SnippetStore, library: ScreenshotLibrary,
@@ -50,18 +54,20 @@ final class PanelCoordinator {
         dictationHistory = DictationHistorySectionController(store: dictationHistoryStore, context: context, snippets: snippets)
         dictation = DictationController(settings: settings, context: context, clipboard: clipboardStore,
                                         history: dictationHistoryStore, words: dictationWordStore)
+        shelf = ShelfController(state: state, settings: settings, clipboard: clipboard, screenshots: screenshots,
+                                dictations: dictationHistory, snippets: snippets)
         let previews = WindowPreviewCache()
         windowPreviews = previews
         apps = AppsSectionController(index: appIndex, context: context, previews: previews)
         predictor = SectionPredictor(settings: settings, memory: DataStore(directory: snippetStore.dataStore.directory.appendingPathComponent("predict")),
                                      runner: runner) { [dictationHistoryStore] in
             PredictionContext.capture(clipboard: clipboardStore.items, media: library.items, dictations: dictationHistoryStore.items,
-                                      app: NSWorkspace.shared.frontmostApplication?.bundleIdentifier, enabled: settings.enabledSections)
+                                      app: NSWorkspace.shared.frontmostApplication?.bundleIdentifier, kinds: settings.visibleKinds)
         }
         clipboard.snippets = snippets
         context.onUse = { [weak self] action, outcome in
             guard let self else { return }
-            predictor.noteAction(action, outcome: outcome, in: state.section)
+            predictor.noteAction(action, outcome: outcome, in: place)
         }
         dictation.onDidEnd = { [weak self] in self?.notch.close() }
         dictation.onActivityChanged = { [weak self] active in
@@ -69,10 +75,15 @@ final class PanelCoordinator {
             if !active { isHoldingToTalk = false }
             hotKeys?.dictationActivityChanged(active)
         }
+        notch.onTabClick = { [weak self] screen in self?.openShelf(on: screen) }
+        notch.onHoverOpen = { [weak self] screen in self?.openShelf(on: screen, focus: false) }
     }
 
     var showsWelcome: Bool { !settings.hasSeenWelcome }
-    var hasEnabledSection: Bool { settings.isEnabled(state.section.feature) }
+    /// False only when every feature that shows items is off.
+    var hasContent: Bool { !settings.visibleChips.isEmpty }
+    /// Where the owner is acting, as the prediction log names it.
+    private var place: String { state.isShelf ? "shelf" : state.chip.rawValue }
 
     /// The time to show, or nil when the Clock feature is off.
     var clockText: String? { settings.isEnabled(.clock) ? clock.text : nil }
@@ -89,31 +100,94 @@ final class PanelCoordinator {
         if !settings.isEnabled(.keepAwake), keepAwake.isActive { keepAwake.stop() }
         applyClockSettings()
         if !settings.isEnabled(.snippets), snippets.isEditing { snippets.cancelEditing() }
-        if !hasEnabledSection {
-            if let first = settings.enabledSections.first { state.section = first; settings.lastSection = first }
+        if !settings.visibleChips.contains(state.chip) {
+            state.chip = settings.visibleChips.first ?? .all
             state.query = ""
             state.footerHint = nil
-            activeDidShow()
+            shelf.select(nil)
         }
     }
 
     // MARK: Opening
 
-    func open(section: Section? = nil) {
-        if let section, !settings.isEnabled(section.feature) { return }
+    /// A plain open (hotkey, tab click, hover) lands where the prediction says, and is scored.
+    func openShelf(on screen: ScreenNotch? = nil, focus: Bool = true) {
         if dictation.isActive { dictation.cancel() }
-        notch.open(section: section)
+        // The welcome and "choose your features" screens live in the island, which a hover must not open.
+        guard hasContent, !showsWelcome else {
+            if focus { prepareToOpen(); notch.open(.expanded, on: screen) }
+            return
+        }
+        // With only Apps on there is nothing to put on the shelf.
+        if settings.visibleChips == [.apps] {
+            if focus { open(chip: .apps) }
+            return
+        }
+        let started = ContinuousClock.now
+        prepareToOpen()
+        let recents = shelf.recents
+        func landing(_ intent: LandingIntent?) -> Landing {
+            let landing = Shelf.landing(for: intent, recents: recents)
+            return landing.expanded && !focus ? Landing(card: recents.first?.id) : landing
+        }
+        let intent = settings.prediction.enabled ? predictor.intentForOpen { landing($0).place } : nil
+        let landed = landing(intent)
+        state.chip = landed.chip
+        notch.open(landed.expanded ? .expanded : .shelf, focus: focus, on: screen)
+        shelf.select(landed.card)
+        if state.chip == .apps { apps.didShow() }
+        Trace.log("plain open \(landed.place) focus=\(focus) took=\(ContinuousClock.now - started)")
     }
 
-    /// Where an open without a named section lands. The notch asks, so tab clicks use it too.
-    func openingSection() -> Section? {
-        if settings.prediction.enabled { return predictor.sectionForOpen() }
-        let preferred = settings.rememberLastSection ? settings.lastSection : (settings.enabledSections.first ?? .clipboard)
-        return settings.isEnabled(preferred.feature) ? preferred : settings.enabledSections.first
+    /// Per-chip hotkeys and menu items go straight to the island on that chip. Not scored.
+    func open(chip: Chip) {
+        guard settings.visibleChips.contains(chip) else { return }
+        if dictation.isActive { dictation.cancel() }
+        if !state.isOpen {
+            prepareToOpen()
+            notch.open(.expanded)
+        } else if state.isShelf {
+            notch.expand()
+        }
+        select(chip)
     }
 
+    /// The toggle hotkey. A shelf opened by hover takes the keys; anything else open closes.
     func toggle() {
-        if state.isOpen { notch.close() } else { open() }
+        peekStarted = nil
+        if state.isShelf, !notch.panel.isKeyWindow { notch.focusShelf(); return }
+        if state.isOpen { notch.close(); return }
+        openShelf()
+        peekStarted = .now
+    }
+
+    /// Letting go of the hotkey after holding it closes the shelf it opened: a peek.
+    func toggleReleased() {
+        guard let started = peekStarted else { return }
+        peekStarted = nil
+        if state.isShelf, ContinuousClock.now - started >= Self.peekHold { notch.close() }
+    }
+
+    /// Shelf to island. ↓ and the Search everything chip land on the first Earlier row.
+    func expand() {
+        guard state.isShelf else { return }
+        notch.expand()
+        shelf.selectFirstRow()
+    }
+
+    private func prepareToOpen() {
+        applyFeatureSettings()
+        frontmost.capture()
+        context.clearHint()
+        clipboard.cancelClearAll()
+        if snippets.isEditing { snippets.cancelEditing() }
+        settingsVisibleAtOpen = Self.settingsWindow != nil
+        // Folder watchers miss subfolders and folders that appear later; the old Screenshots tab rescanned on show.
+        if settings.isEnabled(.screenshots), library.lastScan.map({ Date.now.timeIntervalSince($0) > 30 }) ?? true {
+            library.requestRescan(delay: .zero)
+        }
+        state.query = ""
+        state.chip = settings.visibleChips.first ?? .all
     }
 
     /// Global dictation hotkey: start recording; pressing it again while recording delivers the text.
@@ -155,6 +229,7 @@ final class PanelCoordinator {
     /// new window would sit behind the app the user was in; order it front regardless.
     func didClose() {
         if dictation.isActive { dictation.cancel() }
+        peekStarted = nil
         predictor.sessionEnded()
         guard !settingsVisibleAtOpen else { return }
         Task { @MainActor [weak self] in
@@ -172,59 +247,51 @@ final class PanelCoordinator {
         }
     }
 
-    /// Called by the notch controller right before the island appears.
-    func willOpen() {
-        applyFeatureSettings()
-        frontmost.capture()
-        context.clearHint()
-        settingsVisibleAtOpen = Self.settingsWindow != nil
-        activeDidShow()
-    }
-
     static var settingsWindow: NSWindow? {
         NSApp.windows.first { $0.isVisible && $0.styleMask.contains(.titled) && !($0 is NotchPanel) && !($0 is NotchBaseWindow) }
     }
 
-    func select(_ section: Section) {
-        guard settings.isEnabled(section.feature), section != state.section else { return }
+    /// Chips filter; they keep the query, so a search can be narrowed after it is typed.
+    func select(_ chip: Chip) {
+        guard settings.visibleChips.contains(chip) else { return }
         if snippets.isEditing { snippets.cancelEditing() }
-        state.section = section
-        settings.lastSection = section
-        state.query = ""
+        state.chip = chip
         state.wantsSearchFocus = true
         context.clearHint()
-        activeDidShow()
+        if chip == .apps { apps.didShow() } else { shelf.selectFirstRow() }
     }
 
     func queryChanged() {
-        switch state.section {
-        case .clipboard: clipboard.queryChanged()
-        case .snippets: snippets.queryChanged()
-        case .screenshots: screenshots.queryChanged()
-        case .dictationHistory: dictationHistory.queryChanged()
-        case .apps: apps.queryChanged()
-        }
-    }
-
-    private func activeDidShow() {
-        switch state.section {
-        case .clipboard: clipboard.didShow()
-        case .snippets: snippets.didShow()
-        case .screenshots: screenshots.didShow()
-        case .dictationHistory: dictationHistory.didShow()
-        case .apps: apps.didShow()
-        }
+        if state.chip == .apps { apps.queryChanged() } else { shelf.selectFirstRow() }
     }
 
     // MARK: Key handling
 
     func handle(event: NSEvent) -> Bool {
-        guard let command = KeyRouter.command(for: event, bindings: settings.keyBindings) else { return false }
+        guard let command = KeyRouter.command(for: event, bindings: settings.keyBindings) else {
+            return typeIntoSearch(event)
+        }
         if command == .startDictation, !state.isDictating, !snippets.isEditing {
             startDictation(trigger: HotKey(keyCode: event.keyCode, modifiers: event.modifierFlags))
             return true
         }
         return handle(command)
+    }
+
+    /// Typing on the shelf opens the island with the search started. Keys that arrive before the
+    /// search field has focus would be lost, so they go into the query too.
+    private func typeIntoSearch(_ event: NSEvent) -> Bool {
+        let fieldReady = notch.panel.firstResponder is NSTextView
+        guard state.isShelf || (state.isExpanded && !fieldReady && !showsWelcome && !snippets.isEditing),
+              event.modifierFlags.intersection([.command, .control]).isEmpty,
+              let text = event.characters, text.contains(where: { !$0.isWhitespace && !$0.isNewline }) || !state.query.isEmpty,
+              // Arrows and function keys arrive as private-use characters.
+              text.unicodeScalars.allSatisfy({ !CharacterSet.controlCharacters.contains($0) && !(0xF700...0xF8FF).contains($0.value) })
+        else { return false }
+        expand()
+        state.query += text
+        queryChanged()
+        return true
     }
 
     @discardableResult
@@ -243,27 +310,36 @@ final class PanelCoordinator {
         if showsWelcome {
             switch command {
             case .close: notch.close()
-            case .primaryAction, .secondaryAction, .nextSection, .selectSectionAt: settings.hasSeenWelcome = true
+            case .primaryAction, .secondaryAction, .nextChip, .selectChip: settings.hasSeenWelcome = true
             default: break
             }
             return true
         }
+        if state.isShelf {
+            switch command {
+            case .moveDown: expand(); return true
+            case .nextChip, .previousChip, .selectChip: expand()
+            // These show an editor or a warning the shelf has no room for; the card stays selected.
+            case .newItem, .editItem, .saveAsSnippet, .clearAll: notch.expand()
+            default: break
+            }
+        }
         switch command {
         case .close:
-            if activeHandle(command) { return true }
+            if shelf.handle(.close) { return true }
             notch.close()
             return true
-        case .nextSection, .previousSection:
-            // While editing a snippet, ⇥ moves between fields instead of switching sections.
+        case .nextChip, .previousChip:
+            // While editing a snippet, ⇥ moves between fields instead.
             if snippets.isEditing { return false }
-            let sections = settings.enabledSections
-            guard let index = sections.firstIndex(of: state.section), !sections.isEmpty else { return true }
-            let offset = command == .nextSection ? 1 : sections.count - 1
-            select(sections[(index + offset) % sections.count])
+            let chips = settings.visibleChips
+            guard !chips.isEmpty else { return true }
+            let index = chips.firstIndex(of: state.chip) ?? 0
+            select(chips[(index + (command == .nextChip ? 1 : chips.count - 1)) % chips.count])
             return true
-        case .selectSectionAt(let index):
-            let sections = settings.enabledSections
-            if sections.indices.contains(index) { select(sections[index]) }
+        case .selectChip(let chip):
+            if snippets.isEditing { return false }
+            select(chip)
             return true
         case .openSettings:
             if snippets.isEditing { return false }
@@ -274,38 +350,23 @@ final class PanelCoordinator {
             startDictation()
             return true
         default:
-            return activeHandle(command)
+            guard hasContent else { return false }
+            if state.isExpanded, state.chip == .apps { return appsHandle(command) }
+            switch command {
+            case .primaryAction, .secondaryAction, .delete, .togglePin, .saveAsSnippet, .editItem, .revealInFinder, .quickLook:
+                // Before acting: acting may close the island, which ends the session.
+                if let outcome = shelf.selectedOutcome { predictor.noteAction(String(describing: command), outcome: outcome, in: place) }
+            default: break
+            }
+            return shelf.handle(command)
         }
     }
 
-    /// The selected item in prediction terms, for keyboard actions that do not go through a use path.
-    private var selectedOutcome: Outcome? {
-        switch state.section {
-        case .clipboard: clipboard.selected.map { .clip($0, among: clipboardStore.items) }
-        case .snippets: snippets.selected.map { _ in Outcome(kind: .snippet) }
-        case .screenshots: screenshots.selected.map { .screenshot($0, among: library.items) }
-        case .dictationHistory: dictationHistory.selected.map { .dictation($0, among: dictationHistoryStore.items) }
-        case .apps: apps.selected.map { .app($0, switchTarget: apps.switchTarget) }
+    private func appsHandle(_ command: PanelCommand) -> Bool {
+        if command == .primaryAction || command == .secondaryAction, let entry = apps.selected {
+            predictor.noteAction(String(describing: command), outcome: .app(entry, switchTarget: apps.switchTarget), in: place)
         }
-    }
-
-    private func activeHandle(_ command: PanelCommand) -> Bool {
-        guard hasEnabledSection else { return false }
-        if command == .saveAsSnippet, !settings.isEnabled(.snippets) { return false }
-        switch command {
-        case .primaryAction, .secondaryAction, .delete, .clearAll, .togglePin, .saveAsSnippet, .newItem, .editItem,
-             .revealInFinder, .quickLook:
-            // Before the section acts: acting may close the island, which ends the session.
-            if let outcome = selectedOutcome { predictor.noteAction(String(describing: command), outcome: outcome, in: state.section) }
-        default: break
-        }
-        return switch state.section {
-        case .clipboard: clipboard.handle(command)
-        case .snippets: snippets.handle(command)
-        case .screenshots: screenshots.handle(command)
-        case .dictationHistory: dictationHistory.handle(command)
-        case .apps: apps.handle(command)
-        }
+        return apps.handle(command)
     }
 
     /// Opens the Settings window the same way the app menu's "Settings…" item does (the only path SwiftUI
@@ -332,7 +393,7 @@ final class PanelCoordinator {
         return nil
     }
 
-    // MARK: Footer
+    // MARK: Hints
 
     /// A footer hint. Clicking it runs the command, so mouse users get the same actions.
     struct Hint: Identifiable {
@@ -348,55 +409,66 @@ final class PanelCoordinator {
         settings.keyBindings.chords(for: command).first?.displayString ?? "—"
     }
 
-    /// The chord that opens the tab at this position, for tab tooltips. Positions past the last
-    /// slot (or with no chord bound) have none.
-    func sectionShortcut(at index: Int) -> String? {
-        guard let slot = BindableCommand.sectionSlot(at: index) else { return nil }
-        return settings.keyBindings.chords(for: slot).first?.displayString
+    /// The chord that jumps to a chip, for its tooltip.
+    func chipShortcut(_ chip: Chip) -> String? {
+        guard let index = Chip.allCases.firstIndex(of: chip) else { return nil }
+        return settings.keyBindings.chords(for: BindableCommand.chipSlots[index]).first?.displayString
     }
 
     private func hint(_ command: BindableCommand, _ label: String, systemImage: String? = nil) -> Hint {
         Hint(keys: keys(for: command), label: label, command: command.panelCommand, systemImage: systemImage)
     }
 
-    func footerHints() -> [Hint] {
-        guard hasEnabledSection else { return [] }
+    /// Return and ⌘Return, labelled for what they do to this kind of item.
+    func useHints(for item: ShelfItem?) -> (primary: Hint, secondary: Hint) {
         let app = frontmost.previousAppName ?? "app"
-        let enterCopies = settings.enterAction == .copy
-        let copy: BindableCommand = enterCopies ? .primaryAction : .secondaryAction
-        let paste: BindableCommand = enterCopies ? .secondaryAction : .primaryAction
-        var hints: [Hint] = []
-        switch state.section {
-        case .clipboard:
-            hints = [hint(copy, "Copy", systemImage: "doc.on.doc"), hint(paste, "Paste to \(app)"),
-                     hint(.togglePin, clipboard.selected?.isPinned == true ? "Unpin" : "Pin"),
-                     hint(.saveAsSnippet, "Snippet"), hint(.delete, "Delete")]
-        case .snippets:
-            if snippets.isEditing {
-                hints = [hint(.saveAsSnippet, "Save"), Hint(keys: "⇥", label: "Next field", command: nil), hint(.close, "Cancel")]
-            } else {
-                hints = [hint(copy, "Copy", systemImage: "doc.on.doc"), hint(paste, "Paste to \(app)"), hint(.newItem, "New"), hint(.editItem, "Edit"), hint(.delete, "Delete")]
-            }
-        case .screenshots:
-            hints = [hint(copy, "Copy", systemImage: "doc.on.doc"), hint(paste, "Paste to \(app)"), hint(.quickLook, "Quick Look"),
-                     hint(.revealInFinder, "Finder"), hint(.delete, "Trash")]
-        case .dictationHistory:
-            hints = [hint(copy, "Copy", systemImage: "doc.on.doc"), hint(paste, "Insert"), hint(.saveAsSnippet, "Save as snippet"), hint(.delete, "Delete")]
-        case .apps:
+        let paste = item.map { if case .dictation = $0 { "Insert" } else { "Paste to \(app)" } } ?? "Paste to \(app)"
+        let copy = hint(.primaryAction, "Copy", systemImage: "doc.on.doc")
+        return settings.enterAction == .copy
+            ? (copy, hint(.secondaryAction, paste))
+            : (hint(.primaryAction, paste), hint(.secondaryAction, "Copy", systemImage: "doc.on.doc"))
+    }
+
+    func footerHints() -> [Hint] {
+        guard hasContent else { return [] }
+        if state.chip == .apps {
             let target = apps.selected
             let verb = target?.windowID != nil ? "Switch to window" : target?.isRunning == true ? "Switch to app" : "Open app"
-            hints = [hint(.primaryAction, verb, systemImage: "arrow.up.forward.app"),
-                     Hint(keys: "↑↓←→", label: "Move", command: nil)]
+            return [hint(.primaryAction, verb, systemImage: "arrow.up.forward.app"),
+                    Hint(keys: "↑↓←→", label: "Move", command: nil), hint(.nextChip, "Filter")]
         }
-        if !snippets.isEditing { hints.append(hint(.nextSection, "Section")) }
-        return hints.filter { $0.command != .saveAsSnippet || settings.isEnabled(.snippets) }
+        if snippets.isEditing {
+            return [hint(.saveAsSnippet, "Save"), Hint(keys: "⇥", label: "Next field", command: nil), hint(.close, "Cancel")]
+        }
+        let item = shelf.selected
+        let use = useHints(for: item)
+        var hints = [use.primary, use.secondary]
+        switch item {
+        case .clip(let clip):
+            if clip.kind == .image || clip.kind == .file { hints.append(hint(.quickLook, "Quick Look")) }
+            hints += [hint(.togglePin, clip.isPinned ? "Unpin" : "Pin")]
+            if clip.text != nil { hints.append(hint(.saveAsSnippet, "Snippet")) }
+            hints.append(hint(.delete, "Delete"))
+        case .media:
+            hints += [hint(.quickLook, "Quick Look"), hint(.revealInFinder, "Finder"), hint(.delete, "Trash")]
+        case .dictation:
+            hints += [hint(.saveAsSnippet, "Snippet"), hint(.delete, "Delete")]
+        case .snippet:
+            hints += [hint(.editItem, "Edit"), hint(.newItem, "New"), hint(.delete, "Delete")]
+        case nil:
+            if state.chip == .snippets { hints = [hint(.newItem, "New snippet")] } else { hints = [] }
+        }
+        hints.append(hint(.nextChip, "Filter"))
+        return hints.filter { ($0.command != .saveAsSnippet && $0.command != .newItem) || settings.isEnabled(.snippets) }
     }
 
     // MARK: Automation
 
     func dump() -> [String: Any] {
+        func describe(_ item: ShelfItem) -> [String: Any] { ["id": item.id, "kind": item.kind.rawValue, "title": item.title] }
+        let layout = shelf.layout
         var d: [String: Any] = [
-            "phase": state.isDictating ? "dictation" : state.isExpanded ? "expanded" : "collapsed",
+            "phase": String(describing: state.phase),
             "panelVisible": notch.panel.isVisible,
             "panelKey": notch.panel.isKeyWindow,
             "accessibilityTrusted": Paster.isAccessibilityTrusted,
@@ -405,10 +477,19 @@ final class PanelCoordinator {
             "holdingToTalk": isHoldingToTalk,
             "dictation": ["phase": String(describing: dictation.phase), "transcript": dictation.transcript, "canRetry": dictation.canRetry],
             "keepAwake": ["active": keepAwake.isActive, "error": keepAwake.errorMessage ?? ""],
-            "section": state.section.rawValue,
+            "chip": state.chip.rawValue,
+            "visibleChips": settings.visibleChips.map(\.rawValue),
+            "shelf": shelf.recents.map(describe),
+            "cards": layout.cards.map(describe),
+            "rows": layout.rows.prefix(20).map(describe),
+            "rowCount": layout.rows.count,
+            "selected": shelf.selected.map(describe) ?? [:],
+            "editing": snippets.isEditing,
+            "draft": ["name": snippets.draft.name, "keyword": snippets.draft.keyword, "content": snippets.draft.content],
+            "footer": footerHints().map { "\($0.keys) \($0.label)" },
             "prediction": predictor.dump(),
-            "enabledSections": settings.enabledSections.map(\.rawValue),
             "disabledFeatures": settings.disabledFeatures.map(\.rawValue).sorted(),
+            "opensShelfOnHover": settings.opensShelfOnHover,
             "query": state.query,
             "footerHint": state.footerHint ?? "",
             "welcome": showsWelcome,
@@ -418,18 +499,9 @@ final class PanelCoordinator {
             "bundlePath": Bundle.main.bundleURL.path,
             "showsTab": notch.showsTab,
             "frontmostApp": NSWorkspace.shared.frontmostApplication?.localizedName ?? "",
-            "tabPlan": {
-                let sections = settings.enabledSections
-                let side = (state.metrics.islandSize.width - state.geometry.notchRect.width) / 2
-                let plan = SectionTabLayout.plan(sections, selected: state.section, leftWidth: side - 14,
-                                                 rightWidth: side - 18 - state.headerStatusWidth - 10)
-                return ["left": plan.left.map(\.rawValue), "right": plan.right.map(\.rawValue),
-                        "showsLabel": plan.showsLabel, "sideWidth": side,
-                        "headerStatusWidth": state.headerStatusWidth]
-            }(),
-            "sectionHotKeys": Dictionary(uniqueKeysWithValues: settings.sectionHotKeys.map { ($0.key.rawValue, $0.value.displayString) }),
-            "registeredSectionHotKeys": Dictionary(uniqueKeysWithValues: (hotKeys?.registeredSectionHotKeys ?? [:]).map { ($0.key.rawValue, $0.value.displayString) }),
-            "sectionHotKeyProblems": Dictionary(uniqueKeysWithValues: (hotKeys?.sectionProblems ?? [:]).map { ($0.key.rawValue, $0.value) }),
+            "chipHotKeys": Dictionary(uniqueKeysWithValues: settings.chipHotKeys.map { ($0.key.rawValue, $0.value.displayString) }),
+            "registeredChipHotKeys": Dictionary(uniqueKeysWithValues: (hotKeys?.registeredChipHotKeys ?? [:]).map { ($0.key.rawValue, $0.value.displayString) }),
+            "chipHotKeyProblems": Dictionary(uniqueKeysWithValues: (hotKeys?.chipProblems ?? [:]).map { ($0.key.rawValue, $0.value) }),
             "activeDisplay": notch.state.geometry.displayID,
             "displays": notch.screens.map { screen in
                 ["id": screen.displayID, "active": screen.isActive, "physicalNotch": screen.geometry.hasPhysicalNotch,
@@ -438,32 +510,12 @@ final class PanelCoordinator {
                            "width": screen.window.frame.width, "height": screen.window.frame.height]]
             },
         ]
-        switch state.section {
-        case .clipboard:
-            d["selectedIndex"] = clipboard.selectedIndex
-            d["results"] = clipboard.results.prefix(20).map(\.item.title)
-            d["selected"] = clipboard.selected?.title ?? ""
-        case .snippets:
-            d["selectedIndex"] = snippets.selectedIndex
-            d["results"] = snippets.results.prefix(20).map(\.item.name)
-            d["selected"] = snippets.selected?.name ?? ""
-            d["editing"] = snippets.isEditing
-            d["draft"] = ["name": snippets.draft.name, "keyword": snippets.draft.keyword, "content": snippets.draft.content]
-        case .screenshots:
-            d["selectedIndex"] = screenshots.selectedIndex
-            d["results"] = screenshots.results.prefix(20).map(\.item.filename)
-            d["selected"] = screenshots.selected?.filename ?? ""
-        case .dictationHistory:
-            d["selectedIndex"] = dictationHistory.selectedIndex
-            d["results"] = dictationHistory.results.prefix(20).map(\.text)
-            d["selected"] = dictationHistory.selected?.text ?? ""
-        case .apps:
+        if state.chip == .apps {
             let grid = apps.grid
-            d["selectedIndex"] = apps.selectedIndex
-            d["results"] = grid.items.prefix(30).map(\.displayName)
-            d["selected"] = apps.selected?.displayName ?? ""
-            d["selectedWindow"] = apps.selected?.windowID ?? ""
-            d["appGroups"] = grid.groups.map { ["title": $0.title, "items": $0.items.map(\.displayName)] }
+            d["appsSelectedIndex"] = apps.selectedIndex
+            d["apps"] = grid.items.prefix(30).map(\.displayName)
+            d["appsSelected"] = apps.selected?.displayName ?? ""
+            d["appsSelectedWindow"] = apps.selected?.windowID ?? ""
             d["openWindows"] = apps.windows.map { ["app": $0.appName, "title": $0.shortTitle, "id": $0.id, "focused": $0.isFocused] }
             d["installedApps"] = appIndex.installed.count
         }
@@ -480,8 +532,8 @@ final class HotKeyBinder {
     private(set) var toggleProblem: String?
     private(set) var dictationProblem: String?
     private(set) var holdToTalkProblem: String?
-    private(set) var sectionProblems: [Section: String] = [:]
-    private(set) var registeredSectionHotKeys: [Section: HotKey] = [:]
+    private(set) var chipProblems: [Chip: String] = [:]
+    private(set) var registeredChipHotKeys: [Chip: HotKey] = [:]
     private var escapeID: UInt32?
     private var sessionTriggerID: UInt32?
     private let escapeMonitor = DictationEscapeMonitor()
@@ -502,28 +554,30 @@ final class HotKeyBinder {
         toggleProblem = nil
         dictationProblem = nil
         holdToTalkProblem = nil
-        sectionProblems = [:]
-        registeredSectionHotKeys = [:]
+        chipProblems = [:]
+        registeredChipHotKeys = [:]
+        let released: () -> Void = { [weak self] in self?.coordinator.toggleReleased() }
         if let wanted = settings.toggleHotKey {
             do {
-                try center.register(wanted) { [weak self] in self?.coordinator.toggle() }
+                try center.register(wanted, onRelease: released) { [weak self] in self?.coordinator.toggle() }
                 effectiveToggle = wanted
             } catch {
                 toggleProblem = error.localizedDescription
                 Log.input.error("toggle hotkey failed: \(error.localizedDescription)")
-                if wanted != .fallbackToggle, (try? center.register(.fallbackToggle) { [weak self] in self?.coordinator.toggle() }) != nil {
+                if wanted != .fallbackToggle,
+                   (try? center.register(.fallbackToggle, onRelease: released) { [weak self] in self?.coordinator.toggle() }) != nil {
                     effectiveToggle = .fallbackToggle
                     toggleProblem = "\(wanted.displayString) is taken by another app; using \(HotKey.fallbackToggle.displayString) instead."
                 }
             }
         }
-        for (section, hotKey) in settings.sectionHotKeys where settings.isEnabled(section.feature) {
+        for (chip, hotKey) in settings.chipHotKeys where settings.visibleChips.contains(chip) {
             do {
-                try center.register(hotKey) { [weak self] in self?.coordinator.open(section: section) }
-                registeredSectionHotKeys[section] = hotKey
+                try center.register(hotKey) { [weak self] in self?.coordinator.open(chip: chip) }
+                registeredChipHotKeys[chip] = hotKey
             } catch {
-                sectionProblems[section] = error.localizedDescription
-                Log.input.error("section hotkey \(section.rawValue) failed: \(error.localizedDescription)")
+                chipProblems[chip] = error.localizedDescription
+                Log.input.error("chip hotkey \(chip.rawValue) failed: \(error.localizedDescription)")
             }
         }
         if settings.isEnabled(.dictation), let hotKey = settings.dictationHotKey {

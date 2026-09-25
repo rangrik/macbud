@@ -40,7 +40,7 @@ import SwiftUI
         controller.openDictation()
         defer { controller.close() }
         let host = NSHostingView(rootView: NotchRootView(state: controller.state, controller: controller))
-        #expect(host.fittingSize == controller.state.metrics.dictationWindowFrame(for: controller.state.geometry).size)
+        #expect(host.fittingSize == controller.state.metrics.panelFrame(.dictation, for: controller.state.geometry).size)
     }
 
     @Test func dictationOpensAtItsFinalFrameAndLeavesKeyboardFocusInTheTargetApp() {
@@ -48,7 +48,7 @@ import SwiftUI
         controller.openDictation()
         defer { controller.close() }
 
-        #expect(controller.panel.frame == controller.state.metrics.dictationWindowFrame(for: controller.state.geometry))
+        #expect(controller.panel.frame == controller.state.metrics.panelFrame(.dictation, for: controller.state.geometry))
         #expect(!controller.panel.canBecomeKey)
     }
 

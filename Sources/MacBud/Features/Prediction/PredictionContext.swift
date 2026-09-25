@@ -15,7 +15,7 @@ nonisolated struct PredictionContext: Codable, Equatable, Sendable {
     var kinds: [IntentKind]
 
     static func capture(clipboard: [ClipboardItem], media: [MediaItem], dictations: [DictationHistoryItem],
-                        app: String?, enabled: [Section], now: Date = .now) -> PredictionContext {
+                        app: String?, kinds: [IntentKind], now: Date = .now) -> PredictionContext {
         let clip = clipboard.max { $0.copiedAt < $1.copiedAt }
         let shot = media.max { $0.createdAt < $1.createdAt }
         let dictated = dictations.map(\.createdAt).max()
@@ -26,7 +26,7 @@ nonisolated struct PredictionContext: Codable, Equatable, Sendable {
                                  app: app, clipboardKind: clip?.kind.rawValue, clipboardSource: clip?.sourceBundleID,
                                  clipboardAge: age(clip?.copiedAt), screenshotKind: shot?.kind.rawValue,
                                  screenshotAge: age(shot?.createdAt), dictationAge: age(dictated),
-                                 kinds: IntentKind.available(in: enabled))
+                                 kinds: kinds)
     }
 
     /// Coarse on purpose, so a pick stays usable until something that matters changes.
@@ -62,9 +62,9 @@ nonisolated struct SessionRecord: Codable, Identifiable, Sendable {
     var model: ModelPick?
     var landed: LandingIntent
     var source: String
-    /// Today's tab for `landed`, and the tab the owner acted in. The shelf will not need these.
-    var opened: Section
-    var actedIn: Section?
+    /// Where the open landed and where the owner acted: "shelf" or a chip. Older records name tabs.
+    var opened: String
+    var actedIn: String?
     var outcome: Outcome?
     var action: String?
     var secs: Double?

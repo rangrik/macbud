@@ -45,9 +45,9 @@ struct GeneralSettings: View {
                     ForEach(AppSettings.EnterAction.allCases, id: \.self) { Text($0.title).tag($0) }
                 }
                 Text("⌘↩ always does the other one.").font(.caption).foregroundStyle(.secondary)
-                Toggle("Reopen the last used section", isOn: $settings.rememberLastSection)
-                    .disabled(settings.prediction.enabled)
-                    .help(settings.prediction.enabled ? "Off while Prediction picks the opening section." : "")
+                Toggle("Open the shelf on hover", isOn: $settings.opensShelfOnHover)
+                Text("Rest the pointer on the notch to see your newest items. The keyboard stays with your app.")
+                    .font(.caption).foregroundStyle(.secondary)
                 Toggle("Show a clickable notch tab on every display", isOn: $settings.showNotchTab)
                 Text("External displays get a drawn notch; the shortcut opens on the display you are working on.")
                     .font(.caption).foregroundStyle(.secondary)

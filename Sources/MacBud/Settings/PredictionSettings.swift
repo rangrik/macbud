@@ -10,11 +10,11 @@ struct PredictionSettings: View {
     var body: some View {
         Form {
             SwiftUI.Section {
-                Toggle("Open on the predicted section", isOn: $settings.prediction.enabled)
+                Toggle("Predict what you want when MacBud opens", isOn: $settings.prediction.enabled)
                 Toggle("Learn with Codex", isOn: $settings.prediction.useModel).disabled(!settings.prediction.enabled)
                 status
             } footer: {
-                Text("Opening never waits for a model. Without a fresh pick, rules choose: a screenshot or dictation from the last minute, else Clipboard.")
+                Text("The ring lands on the predicted card; an app opens the Apps filter. Opening never waits for a model. Without a fresh pick, rules choose: a screenshot or dictation from the last minute, else text.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             SwiftUI.Section("Models and limits") {
@@ -123,7 +123,7 @@ struct PredictionSettings: View {
             Image(systemName: s.hit == true ? "checkmark.circle.fill" : s.hit == false ? "xmark.circle.fill" : "circle.dashed")
                 .foregroundStyle(s.hit == true ? .green : s.hit == false ? .orange : .secondary)
             VStack(alignment: .leading, spacing: 2) {
-                Text("\(s.t.formatted(date: .omitted, time: .shortened)) · opened \(s.opened.title) for \(describe(s.landed)) by \(s.source == "model" ? "model" : "rules") · "
+                Text("\(s.t.formatted(date: .omitted, time: .shortened)) · opened \(s.opened) for \(describe(s.landed)) by \(s.source == "model" ? "model" : "rules") · "
                      + (s.outcome.map { "used \($0.kind.rawValue)" + ($0.newest.map { $0 ? " (newest)" : " (older)" } ?? "") } ?? "used nothing"))
                 Text("app \(s.context.app ?? "–") · rules said \(s.heuristic.map(describe) ?? "–") · model said \(s.model.map { describe($0.intent) } ?? "–")"
                      + (s.model.map { ": \($0.note)" } ?? ""))

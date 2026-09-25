@@ -71,15 +71,6 @@ import Testing
         #expect(store.items.map(\.text) == ["pinned", "item 5", "item 4"])
     }
 
-    @Test func searchRanksAndFilters() {
-        let store = makeStore()
-        store.add(text("hello world", at: Date(timeIntervalSince1970: 1)))
-        store.add(text("say hello", at: Date(timeIntervalSince1970: 2)))
-        store.add(text("unrelated", at: Date(timeIntervalSince1970: 3)))
-        let results = store.results(for: "hello")
-        #expect(results.map(\.item.text) == ["hello world", "say hello"])
-    }
-
     @Test func persistsAndReloads() async throws {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("macbud-tests-\(UUID().uuidString)")
         let dataStore = DataStore(directory: dir)

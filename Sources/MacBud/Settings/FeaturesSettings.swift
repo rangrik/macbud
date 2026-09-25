@@ -6,25 +6,18 @@ struct FeaturesSettings: View {
     var body: some View {
         Form {
             SwiftUI.Section {
-                ForEach(settings.sectionOrder) { section in
+                ForEach(Self.items, id: \.feature) { item in
                     HStack(spacing: 10) {
-                        FeatureBadge(kind: section.artwork, size: 22)
-                        Toggle(section.title, isOn: enabled(section.feature)).toggleStyle(.checkbox)
+                        FeatureBadge(kind: item.art, size: 22)
+                        Toggle(item.feature.title, isOn: enabled(item.feature)).toggleStyle(.checkbox)
                         Spacer()
-                        Button { settings.moveSection(section, by: -1) } label: { Image(systemName: "chevron.up") }
-                            .disabled(settings.sectionOrder.first == section)
-                            .help("Move \(section.title) earlier")
-                            .accessibilityLabel("Move \(section.title) earlier")
-                        Button { settings.moveSection(section, by: 1) } label: { Image(systemName: "chevron.down") }
-                            .disabled(settings.sectionOrder.last == section)
-                            .help("Move \(section.title) later")
-                            .accessibilityLabel("Move \(section.title) later")
+                        Text(item.chips).foregroundStyle(.secondary)
                     }
                 }
             } header: {
-                Text("Section tabs")
+                Text("What the shelf shows")
             } footer: {
-                Text("Use the arrows to set the tab order. Uncheck a section to hide it. Saved content is kept.")
+                Text("Unchecking a feature hides its filters and its items. Saved content is kept.")
             }
             SwiftUI.Section("Tools") {
                 Toggle("Dictation", isOn: enabled(.dictation)).toggleStyle(.checkbox)
@@ -38,6 +31,11 @@ struct FeaturesSettings: View {
         }
         .formStyle(.grouped)
     }
+
+    private static let items: [(feature: AppFeature, art: FeatureArt, chips: String)] = [
+        (.clipboard, .clipboard, "Text, Links, Images"), (.screenshots, .screenshots, "Screenshots"),
+        (.dictationHistory, .dictation, "Dictations"), (.snippets, .snippets, "Snippets"), (.apps, .apps, "Apps"),
+    ]
 
     private func enabled(_ feature: AppFeature) -> Binding<Bool> {
         Binding(get: { settings.isEnabled(feature) }, set: { settings.setEnabled($0, for: feature) })

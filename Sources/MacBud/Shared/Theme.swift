@@ -30,6 +30,17 @@ extension Date {
         if Calendar.current.isDateInYesterday(self) { return "Yesterday " + formatted(date: .omitted, time: .shortened) }
         return formatted(date: .abbreviated, time: .shortened)
     }
+
+    /// "now", "9 min", "3 h", "2 d": short enough for a card caption.
+    var shortAge: String {
+        let seconds = Int(max(0, Date.now.timeIntervalSince(self)))
+        switch seconds {
+        case ..<60: return "now"
+        case ..<3600: return "\(seconds / 60) min"
+        case ..<86_400: return "\(seconds / 3600) h"
+        default: return "\(seconds / 86_400) d"
+        }
+    }
 }
 
 extension Int {
@@ -63,6 +74,7 @@ struct KeyHint: View {
             Text(label)
                 .font(.system(size: 11))
                 .foregroundStyle(emphasized ? Theme.textSecondary : Theme.textTertiary)
+                .lineLimit(1)
         }
     }
 }

@@ -18,9 +18,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         coordinator = PanelCoordinator(state: notch.state, notch: notch, settings: settings,
                                        clipboardStore: clipboardStore, snippetStore: snippetStore, library: library)
         notch.keyHandler = { [coordinator] event in coordinator!.handle(event: event) }
-        notch.willOpen = { [coordinator] in coordinator!.willOpen() }
-        notch.sectionForOpen = { [coordinator] in coordinator!.openingSection() }
         notch.contentProvider = { [coordinator] in IslandContentView(state: coordinator!.state, coordinator: coordinator!) }
+        notch.shelfProvider = { [coordinator] in ShelfView(coordinator: coordinator!) }
         notch.dictationProvider = { [coordinator, settings, notch] in
             AnyView(DictationView(controller: coordinator!.dictation, settings: settings,
                                  notchHeight: coordinator!.state.geometry.notchRect.height,
@@ -31,6 +30,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         coordinator.dictation.onEditingChanged = { [notch] editing in notch.setDictationKeyboardFocus(editing) }
         notch.didClose = { [coordinator] in coordinator!.didClose() }
         notch.state.showsNotchTab = settings.showNotchTab
+        notch.state.opensShelfOnHover = settings.opensShelfOnHover
         coordinator.clock.onChange = { [weak coordinator, weak notch] in
             notch?.state.clockText = coordinator?.clockText
         }
@@ -71,7 +71,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if !settings.hasSeenWelcome {
             Task {
                 try? await Task.sleep(for: .milliseconds(700))
-                coordinator.open(section: .clipboard)
+                coordinator.open(chip: .all)
             }
         }
         Log.app.info("MacBud launched; automation=\(Automation.isEnabled)")
@@ -105,14 +105,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             _ = settings.includeVideos
             _ = settings.historyLimit
             _ = settings.toggleHotKey
-            _ = settings.sectionHotKeys
+            _ = settings.chipHotKeys
+            _ = settings.opensShelfOnHover
             _ = settings.dictationHotKey
             _ = settings.holdToTalkHotKey
             _ = settings.keyBindings
             _ = settings.showNotchTab
             _ = settings.clipboardPaused
             _ = settings.disabledFeatures
-            _ = settings.sectionOrder
         } onChange: { [weak self] in
             Task { @MainActor [weak self] in
                 guard let self else { return }
@@ -124,6 +124,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 coordinator.dictationHistoryStore.limit = settings.historyLimit
                 hotKeys.apply()
                 notch.state.showsNotchTab = settings.showNotchTab
+                notch.state.opensShelfOnHover = settings.opensShelfOnHover
                 notch.applyBaseFrame(phase: notch.state.basePhase)
                 observeSettings()
             }

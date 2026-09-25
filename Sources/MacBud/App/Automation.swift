@@ -1,7 +1,9 @@
 import AppKit
 
 /// URL-scheme control surface. `open`/`close`/`toggle` always work so Shortcuts or Raycast can drive
-/// the island; input-injecting and introspection commands need `MACBUD_AUTOMATION=1` in the environment.
+/// the island: `open` is a plain open (the shelf), `open?chip=apps` the island on a chip, and
+/// `open?focus=0` a shelf that leaves the keyboard alone, as a hover does. Input-injecting and
+/// introspection commands need `MACBUD_AUTOMATION=1` in the environment.
 enum Automation {
     static var isEnabled: Bool { ProcessInfo.processInfo.environment["MACBUD_AUTOMATION"] == "1" }
     static let notificationName = Notification.Name("com.rangrik.macbud.automation")
@@ -24,7 +26,9 @@ enum Automation {
         Log.app.info("automation: \(command) \(params)")
         Trace.log("automation \(command) \(params) active=\(NSApp.isActive) key=\(app.notch.panel.isKeyWindow)")
         switch command {
-        case "open": app.coordinator.open(section: params["section"].flatMap(Section.init(rawValue:)))
+        case "open":
+            if let chip = params["chip"].flatMap(Chip.init(rawValue:)) { app.coordinator.open(chip: chip) }
+            else { app.coordinator.openShelf(focus: params["focus"] != "0") }
         case "close": app.notch.close()
         case "toggle": app.coordinator.toggle()
         default:
@@ -54,6 +58,24 @@ enum Automation {
                     continue
                 }
                 if let event = keyEvent(for: token, window: app.notch.panel) { app.notch.panel.sendEvent(event) }
+                try? await Task.sleep(for: .milliseconds(40))
+            }
+        case "mouse":
+            // Clicks and moves at top-left points in the panel or the active notch's tab, through the window's own dispatch.
+            let window: NSWindow = params["window"] == "base" ? app.notch.activeNotch.window : app.notch.panel
+            let point = CGPoint(x: Double(params["x"] ?? "") ?? 0, y: window.frame.height - (Double(params["y"] ?? "") ?? 0))
+            let types: [NSEvent.EventType] = switch params["type"] ?? "click" {
+            case "move": [.mouseMoved]
+            case "double": [.leftMouseDown, .leftMouseUp, .leftMouseDown, .leftMouseUp]
+            default: [.leftMouseDown, .leftMouseUp]
+            }
+            for (index, type) in types.enumerated() {
+                let event = NSEvent.mouseEvent(with: type, location: point, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                                               windowNumber: window.windowNumber, context: nil, eventNumber: 0,
+                                               clickCount: index / 2 + 1, pressure: type == .leftMouseDown ? 1 : 0)
+                // Moves reach the tab through its tracking area, not through dispatch, so hand them to it.
+                if let event, type == .mouseMoved, params["window"] == "base" { app.notch.activeNotch.host?.mouseMoved(with: event) }
+                else if let event { window.sendEvent(event) }
                 try? await Task.sleep(for: .milliseconds(40))
             }
         case "type":

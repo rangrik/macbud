@@ -13,9 +13,9 @@ import Testing
         let shot = MediaItem(url: URL(fileURLWithPath: "/Users/owner/Private/Screenshot secret.png"), kind: .image,
                              createdAt: now - 20, byteCount: 1, folder: URL(fileURLWithPath: "/Users/owner/Private"))
         let context = PredictionContext.capture(clipboard: clips, media: [shot], dictations: [DictationHistoryItem(text: "my pin is 4321")],
-                                                app: "com.apple.Safari", enabled: Section.allCases, now: now)
+                                                app: "com.apple.Safari", kinds: IntentKind.allCases, now: now)
         let rule = LandingIntent(kind: .screenshot, hint: .newest)
-        let miss = SessionRecord(t: now, context: context, heuristic: rule, landed: rule, source: "heuristic", opened: .screenshots,
+        let miss = SessionRecord(t: now, context: context, heuristic: rule, landed: rule, source: "heuristic", opened: "shelf",
                                  outcome: Outcome(kind: .text, newest: true), hit: false)
         for prompt in [PredictionPrompts.driver(context: context, strategies: "", recent: [miss]),
                        PredictionPrompts.reviewer(strategies: "", misses: [miss], hits: [], rates: "")] {
@@ -32,10 +32,10 @@ import Testing
         await predictor.refresh(context)
         #expect(predictor.status == .failed("Not signed in"))
         #expect(predictor.calls.last?.status == "failed")
-        #expect(predictor.sectionForOpen() == .screenshots)
+        #expect(predictor.intentForOpen { _ in "shelf" }?.kind == .screenshot)
     }
 
-    /// Seam: `codex exec --json` output → reply, tokens and cached pick. Catches lost tokens, hidden errors and hidden tabs.
+    /// Seam: `codex exec --json` output → reply, tokens and cached pick. Catches lost tokens, hidden errors and hidden kinds.
     @Test func codexOutputIsParsedAndChecked() async throws {
         let ok = #"""
         {"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"{\"kind\":\"snippet\",\"hint\":\"any\",\"confidence\":0.8,\"note\":\"n\"}"}}
@@ -50,12 +50,12 @@ import Testing
         let all = context()
         let (predictor, _) = makePredictor(FakeRunner(["driver": .success(reply.text)]), all)
         await predictor.refresh(all)
-        #expect(predictor.sectionForOpen() == .snippets)
-        let noSnippets = context(enabled: [.clipboard, .screenshots])
+        #expect(predictor.intentForOpen { _ in "shelf" }?.kind == .snippet)
+        let noSnippets = context(kinds: [.text, .link, .image, .screenshot])
         let (refusing, _) = makePredictor(FakeRunner(["driver": .success(reply.text)]), noSnippets)
         await refusing.refresh(noSnippets)
         #expect(refusing.calls.last?.status == "unusable")
-        #expect(refusing.sectionForOpen() == .clipboard)
+        #expect(refusing.intentForOpen { _ in "shelf" }?.kind == .text)
     }
 
     /// Seam: recorded misses → reviewer → strategies file → next driver prompt.
@@ -67,8 +67,8 @@ import Testing
         let (predictor, settings) = makePredictor(runner, context)
         settings.prediction.missThreshold = 2
         for _ in 0..<2 {
-            #expect(predictor.sectionForOpen() == .clipboard)
-            predictor.noteAction("copy", outcome: Outcome(kind: .snippet), in: .snippets)
+            #expect(predictor.intentForOpen { _ in "shelf" }?.kind == .text)
+            predictor.noteAction("copy", outcome: Outcome(kind: .snippet), in: "snippets")
             predictor.sessionEnded()
         }
         for _ in 0..<200 where predictor.lastReview == nil { try await Task.sleep(for: .milliseconds(10)) }
@@ -78,9 +78,8 @@ import Testing
         #expect(ReviewTrigger.isDue(misses: 1, since: .now - 12 * 3600, now: .now, threshold: 10, hours: 12))
     }
 
-    private func context(screenshotAge: Int? = nil, enabled: [Section] = Section.allCases) -> PredictionContext {
-        PredictionContext(hour: 10, weekday: "Thu", app: "com.apple.dt.Xcode", screenshotAge: screenshotAge,
-                          kinds: IntentKind.available(in: enabled))
+    private func context(screenshotAge: Int? = nil, kinds: [IntentKind] = IntentKind.allCases) -> PredictionContext {
+        PredictionContext(hour: 10, weekday: "Thu", app: "com.apple.dt.Xcode", screenshotAge: screenshotAge, kinds: kinds)
     }
 
     private func makePredictor(_ runner: FakeRunner, _ context: PredictionContext) -> (SectionPredictor, AppSettings) {

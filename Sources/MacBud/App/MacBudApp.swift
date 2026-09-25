@@ -27,8 +27,8 @@ struct MenuBarMenu: View {
     var body: some View {
         Button("Open MacBud") { app.coordinator.toggle() }
         Divider()
-        ForEach(app.settings.enabledSections) { section in
-            Button(section.title) { app.coordinator.open(section: section) }
+        ForEach(app.settings.visibleChips) { chip in
+            Button(chip == .all ? "Search Everything" : chip.title) { app.coordinator.open(chip: chip) }
         }
         if app.settings.isEnabled(.dictation) {
             Button("Start Dictation") { app.coordinator.startDictation() }

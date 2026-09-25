@@ -1,29 +1,28 @@
 import SwiftUI
 
-/// Content of the expanded island window. The black silhouette animates between the notch rect, the
+/// Content of the open panel. The black silhouette animates between the notch rect, the shelf, the
 /// dictation pill and the full island. Pure black with no shadow or edge, so it reads as part of the notch.
 struct NotchRootView: View {
     @Bindable var state: NotchState
     let controller: NotchController
     var content: (() -> IslandContentView)?
+    var shelf: (() -> ShelfView)?
     var dictation: (() -> AnyView)?
 
     var body: some View {
         let m = state.metrics
         let g = state.geometry
         let phase = state.phase
-        let shapeSize: CGSize = switch phase {
-        case .expanded: CGSize(width: m.islandSize.width + m.topFillet * 2, height: m.islandSize.height)
-        case .dictation: CGSize(width: m.dictationSize.width + m.topFillet * 2, height: m.dictationSize.height)
-        case .collapsed: g.notchRect.size
-        }
+        let open = phase != .collapsed
+        let shapeSize = open ? CGSize(width: m.panelSize(phase).width + m.topFillet * 2, height: m.panelSize(phase).height)
+                             : g.notchRect.size
         let radius: CGFloat = switch phase {
         case .expanded: m.bottomRadius
+        case .shelf: m.shelfBottomRadius
         case .dictation: m.dictationBottomRadius
         case .collapsed: m.collapsedBottomRadius
         }
-        let open = phase != .collapsed
-        let canvas = state.panelUsesDictationSize ? m.dictationSize : m.islandSize
+        let canvas = m.panelSize(state.canvasPhase)
         // An invisible expanded view must not determine the smaller dictation window's layout width.
         Color.clear.overlay(alignment: .top) {
             NotchSurface(size: shapeSize, canvasSize: CGSize(width: canvas.width + m.topFillet * 2, height: canvas.height),
@@ -31,6 +30,12 @@ struct NotchRootView: View {
                 if phase == .expanded, let content {
                     content()
                         .frame(width: m.islandSize.width, height: m.islandSize.height)
+                        .padding(.horizontal, m.topFillet)
+                        .transition(.opacity)
+                }
+                if phase == .shelf, let shelf {
+                    shelf()
+                        .frame(width: m.shelfSize.width, height: m.shelfSize.height)
                         .padding(.horizontal, m.topFillet)
                         .transition(.opacity)
                 }
@@ -104,7 +109,7 @@ struct NotchBaseView: View {
                 .animation(.easeOut(duration: 0.18), value: hovered)
 
             if tab, !toasting {
-                NotchTabContent(state: state, notchWidth: g.notchRect.width,
+                NotchTabContent(state: state, hovered: hovered, notchWidth: g.notchRect.width,
                                 wing: m.tabExtension + (hovered ? m.tabHoverGrowth.width : 0), height: size.height)
                     .frame(width: size.width, height: size.height)
                     .animation(.easeOut(duration: 0.18), value: hovered)
@@ -128,16 +133,18 @@ struct NotchBaseView: View {
     nonisolated static let space = "notchBase"
 }
 
-/// The wings beside the notch. Hover and click are handled by `ClickableHostingView` in AppKit
-/// (the base window can never become key, so SwiftUI gestures never received the first click).
+/// The wings beside the notch, on the closed tab and as the open panel's top band. Hover and click are
+/// handled by `ClickableHostingView` in AppKit (the base window can never become key).
 struct NotchTabContent: View {
     @Bindable var state: NotchState
+    var hovered = false
+    /// The open panel keeps the wings but not the "click to open" chevron.
+    var isOpen = false
     let notchWidth: CGFloat
     let wing: CGFloat
     let height: CGFloat
 
     var body: some View {
-        let hovered = state.tabHovered
         HStack(spacing: 0) {
             leftWing(hovered: hovered).frame(width: wing, height: height)
             Spacer().frame(width: notchWidth)
@@ -145,7 +152,7 @@ struct NotchTabContent: View {
         }
         .animation(.easeOut(duration: 0.18), value: hovered)
         .accessibilityLabel(state.keepsAwake ? "MacBud · Keep Awake is on" : "MacBud")
-        .accessibilityHint("Click to open MacBud")
+        .accessibilityHint(isOpen ? "" : "Click to open MacBud")
     }
 
     /// With the clock on, the logo moves to the outer right edge. It is in color only while Keep Awake is on.
@@ -163,7 +170,7 @@ struct NotchTabContent: View {
     @ViewBuilder private func rightWing(hovered: Bool) -> some View {
         if state.clockText != nil {
             MacBudMark(size: hovered ? 19 : 17, lit: state.keepsAwake)
-        } else {
+        } else if !isOpen {
             Image(systemName: "chevron.down")
                 .font(.system(size: 9, weight: .bold))
                 .foregroundStyle(.white.opacity(hovered ? 0.95 : 0.42))

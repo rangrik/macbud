@@ -1,6 +1,6 @@
 #!/bin/bash
 # Helpers to drive MacBud through its URL scheme during development.
-# Usage: source scripts/e2e.sh; mb open section=clipboard; mb key seq=down,return; snap name; dump
+# Usage: source scripts/e2e.sh; mb open; mb open chip=apps; mb key seq=right,return; snap name; dump
 OUT=${OUT:-/tmp/macbud-e2e}
 mkdir -p "$OUT"
 MBCTL=${MBCTL:-$(dirname "${BASH_SOURCE[0]}")/../build/mbctl}

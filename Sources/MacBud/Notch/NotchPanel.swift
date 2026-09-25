@@ -36,6 +36,13 @@ final class NotchPanel: NSPanel {
     override var canBecomeKey: Bool { acceptsKeyboardFocus }
     override var canBecomeMain: Bool { false }
 
+    /// A focused field selects all its text; a search begun by typing on the shelf must go on, not be replaced.
+    override func makeFirstResponder(_ responder: NSResponder?) -> Bool {
+        let made = super.makeFirstResponder(responder)
+        if made, let editor = firstResponder as? NSTextView, editor.isFieldEditor { editor.moveToEndOfDocument(nil) }
+        return made
+    }
+
     override func sendEvent(_ event: NSEvent) {
         if event.type == .keyDown, let keyHandler, keyHandler(event) { return }
         super.sendEvent(event)

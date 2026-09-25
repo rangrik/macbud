@@ -94,7 +94,6 @@ import Testing
         let restored = DictationHistoryStore(dataStore: dataStore)
         await restored.load()
         #expect(restored.items.map(\.text) == ["Second transcript\nwith a second line", "First transcript"])
-        #expect(restored.results(for: "FIRST").map(\.text) == ["First transcript"])
         restored.remove(restored.items[0].id)
         await restored.flush()
         let persisted = await dataStore.load([DictationHistoryItem].self, from: "dictation-history.json")
@@ -129,12 +128,12 @@ import Testing
                                            clipboardStore: ClipboardStore(), snippetStore: snippetStore, library: ScreenshotLibrary())
         let text = "Meeting notes\nKeep all the words, punctuation, and line breaks."
         coordinator.dictationHistoryStore.add(text)
-        notch.state.section = .dictationHistory
-        #expect(coordinator.dictationHistory.handle(.saveAsSnippet))
-        #expect(notch.state.section == .snippets)
+        notch.state.chip = .dictations
+        #expect(coordinator.dictationHistory.handle(.saveAsSnippet, on: coordinator.dictationHistoryStore.items[0]))
+        #expect(notch.state.chip == .snippets)
         #expect(coordinator.snippets.isEditing)
         #expect(coordinator.snippets.draft.content == text)
-        #expect(coordinator.snippets.saveDraft())
+        #expect(coordinator.snippets.saveDraft() != nil)
         #expect(snippetStore.snippets.first?.content == text)
         #expect(coordinator.dictationHistoryStore.items.first?.text == text)
     }

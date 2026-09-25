@@ -124,23 +124,23 @@ import Foundation
         let defaults = UserDefaults(suiteName: UUID().uuidString)!
         // An existing install: shortcuts saved back when there was no Apps tab.
         let before = AppSettings(defaults: defaults)
-        before.sectionHotKeys = [.clipboard: AppSettings.defaultSectionHotKeys[.clipboard]!]
+        before.chipHotKeys = [.all: AppSettings.defaultChipHotKeys[.all]!]
 
         let upgraded = AppSettings(defaults: defaults)
-        #expect(upgraded.sectionHotKeys[.apps] == AppSettings.defaultSectionHotKeys[.apps])
+        #expect(upgraded.chipHotKeys[.apps] == AppSettings.defaultChipHotKeys[.apps])
 
-        upgraded.sectionHotKeys.removeValue(forKey: .apps)
+        upgraded.chipHotKeys.removeValue(forKey: .apps)
         let relaunched = AppSettings(defaults: defaults)
-        #expect(relaunched.sectionHotKeys[.apps] == nil, "a shortcut you cleared stays cleared")
+        #expect(relaunched.chipHotKeys[.apps] == nil, "a shortcut you cleared stays cleared")
     }
 
     @Test func migrationNeverStealsAChordAnotherTabIsUsing() {
         let defaults = UserDefaults(suiteName: UUID().uuidString)!
-        let taken = AppSettings.defaultSectionHotKeys[.apps]!
+        let taken = AppSettings.defaultChipHotKeys[.apps]!
         let before = AppSettings(defaults: defaults)
-        before.sectionHotKeys = [.snippets: taken]
+        before.chipHotKeys = [.snippets: taken]
         let upgraded = AppSettings(defaults: defaults)
-        #expect(upgraded.sectionHotKeys[.apps] == nil)
-        #expect(upgraded.sectionHotKeys[.snippets] == taken)
+        #expect(upgraded.chipHotKeys[.apps] == nil)
+        #expect(upgraded.chipHotKeys[.snippets] == taken)
     }
 }

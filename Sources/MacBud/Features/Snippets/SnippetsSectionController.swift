@@ -18,6 +18,7 @@ final class SnippetDraft {
     }
 }
 
+/// What can be done to a snippet, and the editor for new and changed ones. The shelf decides which snippet.
 @Observable
 final class SnippetsSectionController {
     enum Mode: Equatable { case list, editing }
@@ -28,7 +29,6 @@ final class SnippetsSectionController {
 
     var mode: Mode = .list
     let draft = SnippetDraft()
-    var selectedIndex = 0
 
     init(store: SnippetStore, clipboard: ClipboardStore, context: ActionContext) {
         self.store = store
@@ -36,22 +36,7 @@ final class SnippetsSectionController {
         self.context = context
     }
 
-    var results: [(item: Snippet, match: SearchMatch)] { store.results(for: context.state.query) }
-
-    var selected: Snippet? {
-        let r = results
-        return r.indices.contains(selectedIndex) ? r[selectedIndex].item : nil
-    }
-
     var isEditing: Bool { mode == .editing }
-
-    func didShow() {
-        selectedIndex = 0
-        if mode == .editing, !draft.isNew || !draft.content.isEmpty { return }
-        mode = .list
-    }
-
-    func queryChanged() { selectedIndex = 0 }
 
     // MARK: Editing
 
@@ -69,8 +54,8 @@ final class SnippetsSectionController {
     }
 
     @discardableResult
-    func saveDraft() -> Bool {
-        guard draft.isValid else { context.showHint("A snippet needs a name and some content"); return false }
+    func saveDraft() -> Snippet? {
+        guard draft.isValid else { context.showHint("A snippet needs a name and some content"); return nil }
         let existing = draft.id.flatMap(store.snippet(id:))
         var snippet = existing ?? Snippet(name: "", keyword: "", content: "")
         snippet.name = draft.name.trimmingCharacters(in: .whitespaces)
@@ -78,9 +63,8 @@ final class SnippetsSectionController {
         snippet.content = draft.content
         store.upsert(snippet)
         endEditing()
-        select(snippet)
         context.showHint(existing == nil ? "Snippet saved" : "Snippet updated")
-        return true
+        return store.snippet(id: snippet.id)
     }
 
     func cancelEditing() { endEditing() }
@@ -92,42 +76,28 @@ final class SnippetsSectionController {
 
     // MARK: Commands
 
-    func handle(_ command: PanelCommand) -> Bool {
-        if mode == .editing {
-            switch command {
-            case .close: cancelEditing(); return true
-            case .secondaryAction, .saveAsSnippet: saveDraft(); return true
-            default: return false // let the editor's text fields have the keys
-            }
-        }
-        let count = results.count
+    /// While editing, the editor's fields keep every key except close and save.
+    func handleEditing(_ command: PanelCommand) -> Bool {
         switch command {
-        case .moveUp: move(by: -1, count: count)
-        case .moveDown: move(by: 1, count: count)
-        case .pageUp: move(by: -8, count: count)
-        case .pageDown: move(by: 8, count: count)
-        case .moveToStart: selectedIndex = 0
-        case .moveToEnd: selectedIndex = max(0, count - 1)
+        case .close: cancelEditing(); return true
+        case .secondaryAction, .saveAsSnippet: saveDraft(); return true
+        default: return false
+        }
+    }
+
+    func handle(_ command: PanelCommand, on snippet: Snippet) -> Bool {
+        switch command {
         case .primaryAction, .secondaryAction:
-            guard let snippet = selected else { beginNew(); return true }
             activate(snippet, paste: context.wantsPaste(for: command))
         case .delete:
-            guard let snippet = selected else { return true }
             store.remove(snippet.id)
-            selectedIndex = min(selectedIndex, max(0, results.count - 1))
             context.showHint("Deleted “\(snippet.name)”")
-        case .newItem: beginNew()
         case .editItem:
-            guard let snippet = selected else { return true }
             beginEdit(snippet)
         default:
             return false
         }
         return true
-    }
-
-    func select(_ snippet: Snippet) {
-        if let index = results.firstIndex(where: { $0.item.id == snippet.id }) { selectedIndex = index }
     }
 
     func activate(_ snippet: Snippet, paste: Bool) {
@@ -145,10 +115,5 @@ final class SnippetsSectionController {
         let current = NSPasteboard.general.string(forType: .string)
         let latest = clipboard.items.filter { $0.kind == .text || $0.kind == .link }.max { $0.copiedAt < $1.copiedAt }?.text
         return SnippetExpander.expand(snippet.content, context: SnippetExpander.Context(clipboard: current ?? latest))
-    }
-
-    private func move(by delta: Int, count: Int) {
-        guard count > 0 else { selectedIndex = 0; return }
-        selectedIndex = min(max(selectedIndex + delta, 0), count - 1)
     }
 }

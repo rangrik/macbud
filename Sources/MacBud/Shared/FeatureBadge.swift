@@ -27,24 +27,14 @@ enum FeatureArt {
     }
 }
 
-extension Section {
-    var artwork: FeatureArt {
-        switch self {
-        case .clipboard: .clipboard
-        case .snippets: .snippets
-        case .screenshots: .screenshots
-        case .dictationHistory: .dictation
-        case .apps: .apps
-        }
-    }
-}
-
 struct FeatureBadge: View {
     let kind: FeatureArt
     var size: CGFloat = 22
+    /// A glyph for one kind of item, in the feature's colours.
+    var symbol: String?
 
     var body: some View {
-        Image(systemName: kind.symbol)
+        Image(systemName: symbol ?? kind.symbol)
             .font(.system(size: size * 0.52, weight: .semibold))
             .foregroundStyle(.white)
             .frame(width: size, height: size)
