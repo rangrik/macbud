@@ -44,23 +44,6 @@ final class SnippetStore {
 
     func snippet(id: UUID) -> Snippet? { snippets.first { $0.id == id } }
 
-    /// Most used first when the query is empty; otherwise best match first, with exact keyword hits on top.
-    func results(for query: String) -> [(item: Snippet, match: SearchMatch)] {
-        let trimmed = query.trimmingCharacters(in: .whitespaces)
-        if trimmed.isEmpty {
-            return snippets.sorted { a, b in a.useCount != b.useCount ? a.useCount > b.useCount : a.name.localizedCaseInsensitiveCompare(b.name) == .orderedAscending }
-                .map { ($0, SearchMatch(score: 0, ranges: [])) }
-        }
-        var ranked = SearchMatcher.rank(snippets, query: trimmed, text: \.searchText)
-        let lower = trimmed.lowercased()
-        ranked.sort { a, b in
-            let ak = a.item.keyword.lowercased() == lower, bk = b.item.keyword.lowercased() == lower
-            if ak != bk { return ak }
-            return a.match.score > b.match.score
-        }
-        return ranked
-    }
-
     func replaceAll(_ new: [Snippet]) {
         snippets = new
         scheduleSave()

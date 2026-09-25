@@ -1,6 +1,6 @@
 import AppKit
 
-/// Everything the keyboard can ask the island to do. Sections handle what applies to them.
+/// Everything the keyboard can ask the island to do. Each kind of item handles what applies to it.
 nonisolated enum PanelCommand: Equatable, Sendable {
     case moveUp, moveDown, moveLeft, moveRight, pageUp, pageDown, moveToStart, moveToEnd
     /// ↩ — copy or paste depending on the "Enter" setting.
@@ -8,10 +8,8 @@ nonisolated enum PanelCommand: Equatable, Sendable {
     /// ⌘↩ — the other one.
     case secondaryAction
     case delete, clearAll, togglePin, saveAsSnippet, newItem, editItem, revealInFinder, quickLook
-    case nextSection, previousSection
-    /// Jump to the section sitting at this position in the island's tab bar (0-based),
-    /// so ⌘1…⌘4 follow the order set in Settings › Features rather than fixed sections.
-    case selectSectionAt(Int)
+    case nextChip, previousChip
+    case selectChip(Chip)
     case startDictation
     case close, openSettings
 }

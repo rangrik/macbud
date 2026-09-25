@@ -9,19 +9,22 @@ final class NotchController {
     private(set) var screens: [ScreenNotch] = []
     private var panelHost: NSHostingView<NotchRootView>?
     var contentProvider: (() -> IslandContentView)?
+    var shelfProvider: (() -> ShelfView)?
     var dictationProvider: (() -> AnyView)?
     private var isInstalled = false
     private var collapseTask: Task<Void, Never>?
     private var toastTask: Task<Void, Never>?
     private var toastWork: (() -> Void)?
+    private var hoverTask: Task<Void, Never>?
+    private var leaveTask: Task<Void, Never>?
     private var observers: [NSObjectProtocol] = []
     private var isSnapshotting = false
 
     var keyHandler: ((NSEvent) -> Bool)?
-    var willOpen: (() -> Void)?
     var didClose: (() -> Void)?
-    /// Where an open without a named section lands, so a tab click and the shortcut agree.
-    var sectionForOpen: (() -> Section?)?
+    /// A click on a closed notch, and a pointer resting on one. The coordinator decides what opens.
+    var onTabClick: ((ScreenNotch) -> Void)?
+    var onHoverOpen: ((ScreenNotch) -> Void)?
 
     static let openAnimation: Animation = .spring(duration: 0.38, bounce: 0.18)
     static let closeAnimation: Animation = .spring(duration: 0.26, bounce: 0)
@@ -30,7 +33,7 @@ final class NotchController {
     init() {
         let geometry = NotchGeometry.activeScreen().map(NotchGeometry.detect(on:)) ?? .fallback
         state = NotchState(geometry: geometry)
-        panel = NotchPanel(contentRect: state.metrics.expandedWindowFrame(for: geometry))
+        panel = NotchPanel(contentRect: state.metrics.panelFrame(.expanded, for: geometry))
         syncScreens()
     }
 
@@ -43,7 +46,8 @@ final class NotchController {
     var base: NotchBaseWindow { activeNotch.window }
 
     func install() {
-        let panelHost = NotchHostingView(rootView: NotchRootView(state: state, controller: self, content: contentProvider, dictation: dictationProvider))
+        let panelHost = NotchHostingView(rootView: NotchRootView(state: state, controller: self, content: contentProvider,
+                                                                 shelf: shelfProvider, dictation: dictationProvider))
         panelHost.sizingOptions = []
         panel.contentView = panelHost
         panel.keyHandler = { [weak self] event in self?.keyHandler?(event) ?? false }
@@ -74,7 +78,7 @@ final class NotchController {
         let host = ClickableHostingView(rootView: NotchBaseView(screen: screen, state: state, controller: self))
         host.sizingOptions = []
         host.onClick = { [weak self] point in self?.tabClicked(on: screen, at: point) }
-        host.onHoverChange = { [weak self] hovering in self?.state.tabHovered = hovering }
+        host.onHoverChange = { [weak self] hovering in self?.tabHoverChanged(hovering, on: screen) }
         host.onHoverMove = { [weak self] point in self?.toastHoverMoved(to: point, on: screen) }
         screen.window.contentView = host
         screen.host = host
@@ -128,10 +132,6 @@ final class NotchController {
         Trace.log("retarget display=\(geometry.displayID) frame=\(String(describing: geometry.screenFrame))")
     }
 
-    func toggle(section: Section? = nil) {
-        if state.isOpen, section == nil || section == state.section { close() } else { open(section: section) }
-    }
-
     private func tabClicked(on screen: ScreenNotch, at point: CGPoint) {
         Trace.log("tab clicked; display=\(screen.displayID) open=\(state.isOpen)")
         if screen === activeNotch, state.basePhase == .toast, state.toast?.action != nil,
@@ -139,7 +139,45 @@ final class NotchController {
             performToastAction()
             return
         }
-        if state.isOpen { close() } else { open(on: screen) }
+        if state.isOpen { close() } else { onTabClick?(screen) }
+    }
+
+    /// Passing the pointer through on the way to the menu bar must not open anything, so it has to rest.
+    private func tabHoverChanged(_ hovering: Bool, on screen: ScreenNotch) {
+        state.tabHovered = hovering
+        hoverTask?.cancel()
+        guard hovering else { return }
+        let started = ContinuousClock.now
+        hoverTask = Task { [weak self] in
+            try? await Task.sleep(for: HoverDwell.delay)
+            guard !Task.isCancelled, let self,
+                  HoverDwell.opens(enabled: state.opensShelfOnHover, phase: state.phase, toasting: state.basePhase == .toast,
+                                   hoveredFor: ContinuousClock.now - started) else { return }
+            Trace.log("hover open display=\(screen.displayID)")
+            onHoverOpen?(screen)
+        }
+    }
+
+    /// The shelf closes once the pointer has been on it and then stays off it for a moment.
+    /// Polled rather than tracked: a fast exit can skip the enter event a tracking area needs.
+    private func watchPointerLeavingShelf() {
+        leaveTask?.cancel()
+        leaveTask = Task { [weak self] in
+            var visited = false
+            var awaySince: ContinuousClock.Instant?
+            while !Task.isCancelled {
+                guard let self, state.isShelf else { return }
+                if panel.frame.contains(NSEvent.mouseLocation) {
+                    visited = true
+                    awaySince = nil
+                } else if visited {
+                    let since = awaySince ?? ContinuousClock.now
+                    awaySince = since
+                    if ContinuousClock.now - since >= HoverDwell.leaveDelay { Trace.log("shelf left by pointer"); close(); return }
+                }
+                try? await Task.sleep(for: .milliseconds(50))
+            }
+        }
     }
 
     private func toastHoverMoved(to point: CGPoint, on screen: ScreenNotch) {
@@ -173,7 +211,7 @@ final class NotchController {
         let height = state.metrics.dictationHeight(forLines: lines)
         guard state.phase == .dictation, abs(state.metrics.dictationSize.height - height) > 0.5 else { return }
         state.metrics.dictationSize.height = height
-        panel.setFrame(state.metrics.dictationWindowFrame(for: state.geometry), display: true)
+        panel.setFrame(state.metrics.panelFrame(.dictation, for: state.geometry), display: true)
     }
 
     /// Lets the transcript take keystrokes while you edit it, and hands focus back afterwards.
@@ -193,9 +231,9 @@ final class NotchController {
         state.wantsSearchFocus = false
         state.footerHint = nil
         panel.acceptsKeyboardFocus = false
-        state.panelUsesDictationSize = true
+        state.canvasPhase = .dictation
         state.metrics.dictationSize.height = state.metrics.dictationBaseHeight
-        panel.setFrame(state.metrics.dictationWindowFrame(for: state.geometry), display: false)
+        panel.setFrame(state.metrics.panelFrame(.dictation, for: state.geometry), display: false)
         activeNotch.window.orderOut(nil)
         panel.orderFrontRegardless()
         withAnimation(Self.openAnimation) { state.phase = .dictation }
@@ -203,12 +241,9 @@ final class NotchController {
         Trace.log("openDictation key=\(panel.isKeyWindow)")
     }
 
-    func open(section: Section? = nil) { open(section: section, on: nil) }
-
-    /// `screen` pins the panel to a clicked tab; otherwise it follows the pointer / focused display.
-    func open(on screen: ScreenNotch) { open(section: nil, on: screen) }
-
-    private func open(section: Section?, on screen: ScreenNotch?) {
+    /// Shows the panel in `phase` on the display in use, or on `screen` when its tab was clicked.
+    /// Without `focus` the keyboard stays with the app in front: a hover must never take it.
+    func open(_ phase: NotchPhase = .expanded, focus: Bool = true, on screen: ScreenNotch? = nil) {
         let started = ContinuousClock.now
         if let screen {
             syncScreens()
@@ -219,27 +254,46 @@ final class NotchController {
         }
         collapseTask?.cancel()
         toastTask?.cancel()
+        hoverTask?.cancel()
         state.toast = nil
         state.basePhase = .idle
         applyBaseFrame()
-        if let section = section ?? sectionForOpen?() { state.section = section }
-        state.query = ""
         state.footerHint = nil
-        willOpen?()
 
-        panel.acceptsKeyboardFocus = true
-        state.panelUsesDictationSize = false
-        panel.setFrame(state.metrics.expandedWindowFrame(for: state.geometry), display: false)
+        panel.acceptsKeyboardFocus = focus
+        state.canvasPhase = phase
+        panel.setFrame(state.metrics.panelFrame(phase, for: state.geometry), display: false)
         panel.orderFrontRegardless()
+        if focus { panel.makeKey() }
+        withAnimation(Self.openAnimation) { state.phase = phase }
+        state.wantsSearchFocus = phase == .expanded
+        if phase == .shelf { watchPointerLeavingShelf() }
+        Trace.log("open \(phase) took=\(ContinuousClock.now - started) display=\(state.geometry.displayID) key=\(panel.isKeyWindow) firstResponder=\(String(describing: panel.firstResponder))")
+    }
+
+    /// Shelf to island, in place: the canvas grows first so the shelf does not move while the shape follows.
+    func expand() {
+        guard state.isShelf else { return }
+        leaveTask?.cancel()
+        panel.acceptsKeyboardFocus = true
+        state.canvasPhase = .expanded
+        panel.setFrame(state.metrics.panelFrame(.expanded, for: state.geometry), display: false)
         panel.makeKey()
         withAnimation(Self.openAnimation) { state.phase = .expanded }
         state.wantsSearchFocus = true
-        Log.notch.debug("open \(self.state.section.rawValue)")
-        Trace.log("open \(state.section.rawValue) took=\(ContinuousClock.now - started) display=\(state.geometry.displayID) key=\(panel.isKeyWindow) firstResponder=\(String(describing: panel.firstResponder))")
+        Trace.log("expand key=\(panel.isKeyWindow)")
+    }
+
+    /// A shelf opened by hover takes the keyboard only when asked, by the hotkey.
+    func focusShelf() {
+        guard state.isShelf else { return }
+        panel.acceptsKeyboardFocus = true
+        panel.makeKey()
     }
 
     func close() {
         guard state.isOpen else { return }
+        leaveTask?.cancel()
         state.wantsSearchFocus = false
         withAnimation(Self.closeAnimation) { state.phase = .collapsed }
         if panel.isKeyWindow { panel.resignKey() }
@@ -287,8 +341,7 @@ final class NotchController {
         guard let current = screens.first(where: { $0.displayID == state.geometry.displayID }) else { return }
         if current.geometry != state.geometry {
             state.geometry = current.geometry
-            if state.isExpanded { panel.setFrame(state.metrics.expandedWindowFrame(for: current.geometry), display: true) }
-            if state.isDictating { panel.setFrame(state.metrics.dictationWindowFrame(for: current.geometry), display: true) }
+            if state.isOpen { panel.setFrame(state.metrics.panelFrame(state.canvasPhase, for: current.geometry), display: true) }
         }
         applyBaseFrame(phase: state.basePhase)
     }
@@ -312,15 +365,16 @@ final class NotchController {
     }
 
     func panelDidResignKey() {
-        Trace.log("panel resigned key; expanded=\(state.isExpanded) frontmost=\(NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "-") active=\(NSApp.isActive)")
-        if state.isExpanded, !isSnapshotting { close() }
+        Trace.log("panel resigned key; phase=\(state.phase) frontmost=\(NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "-") active=\(NSApp.isActive)")
+        if state.isExpanded || state.isShelf, !isSnapshotting { close() }
     }
 
     func snapshot(window: WindowKind, to url: URL) throws {
         let size = (window == .panel ? panel.frame.size : activeNotch.window.frame.size)
         let backdrop = Color(red: 0.55, green: 0.60, blue: 0.70)
         let content: AnyView = switch window {
-        case .panel: AnyView(NotchRootView(state: state, controller: self, content: contentProvider, dictation: dictationProvider))
+        case .panel: AnyView(NotchRootView(state: state, controller: self, content: contentProvider, shelf: shelfProvider,
+                                           dictation: dictationProvider))
         case .base: AnyView(NotchBaseView(screen: activeNotch, state: state, controller: self))
         }
         let renderer = ImageRenderer(content: content.frame(width: size.width, height: size.height).background(backdrop)

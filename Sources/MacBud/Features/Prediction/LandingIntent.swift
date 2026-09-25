@@ -4,18 +4,20 @@ import Foundation
 nonisolated enum IntentKind: String, Codable, CaseIterable, Sendable {
     case text, link, image, screenshot, dictation, snippet, app
 
-    /// The one place intents meet today's tabbed island; the shelf redesign replaces only this.
-    var section: Section {
+    /// The chip that holds items of this kind. `Shelf.landing` decides where an open lands.
+    var chip: Chip {
         switch self {
+        case .text: .text
+        case .link: .links
+        case .image: .images
         case .screenshot: .screenshots
-        case .dictation: .dictationHistory
+        case .dictation: .dictations
         case .snippet: .snippets
         case .app: .apps
-        case .text, .link, .image: .clipboard
         }
     }
 
-    static func available(in enabled: [Section]) -> [IntentKind] { allCases.filter { enabled.contains($0.section) } }
+    static func available(in chips: [Chip]) -> [IntentKind] { allCases.filter { chips.contains($0.chip) } }
 
     /// MacBud's own copies are dictation output. Files count as text until there is a file kind.
     init(clip kind: ClipboardItem.Kind, source: String?) {

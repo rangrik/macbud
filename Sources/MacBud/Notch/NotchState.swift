@@ -1,34 +1,28 @@
 import SwiftUI
 
-nonisolated enum Section: String, CaseIterable, Codable, Identifiable, Sendable {
-    case clipboard, snippets, screenshots, dictationHistory, apps
+/// A filter over the shelf. One fixed order, so ⌘1…⌘8 never move.
+nonisolated enum Chip: String, CaseIterable, Codable, Identifiable, Sendable {
+    case all, text, links, images, screenshots, dictations, snippets, apps
 
     var id: String { rawValue }
-    var title: String {
-        switch self {
-        case .clipboard: "Clipboard"
-        case .snippets: "Snippets"
-        case .screenshots: "Screenshots"
-        case .dictationHistory: "History"
-        case .apps: "Apps"
+    var title: String { rawValue.prefix(1).uppercased() + rawValue.dropFirst() }
+
+    /// Saved shortcuts name the old tabs; each tab becomes the chip that shows the same things.
+    init(from decoder: any Decoder) throws {
+        let raw = try decoder.singleValueContainer().decode(String.self)
+        switch raw {
+        case "clipboard": self = .all
+        case "dictationHistory": self = .dictations
+        default:
+            guard let chip = Chip(rawValue: raw) else {
+                throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: "Unknown chip \(raw)"))
+            }
+            self = chip
         }
     }
-    var symbol: String {
-        switch self {
-        case .clipboard: "doc.on.clipboard"
-        case .snippets: "text.badge.checkmark"
-        case .screenshots: "photo.on.rectangle.angled"
-        case .dictationHistory: "clock"
-        case .apps: "square.grid.2x2"
-        }
-    }
-    var searchPlaceholder: String { self == .dictationHistory ? "Search dictation history…" : "Search \(title.lowercased())…" }
-    var index: Int { Section.allCases.firstIndex(of: self) ?? 0 }
-    var next: Section { Section.allCases[(index + 1) % Section.allCases.count] }
-    var previous: Section { Section.allCases[(index + Section.allCases.count - 1) % Section.allCases.count] }
 }
 
-nonisolated enum NotchPhase: Equatable, Sendable { case collapsed, expanded, dictation }
+nonisolated enum NotchPhase: Equatable, Sendable { case collapsed, shelf, expanded, dictation }
 nonisolated enum BasePhase: Equatable, Sendable { case idle, toast }
 
 /// A button the toast offers. The work it does lives on NotchController.
@@ -49,10 +43,10 @@ struct Toast: Equatable, Sendable {
 @Observable
 final class NotchState {
     var phase: NotchPhase = .collapsed
-    /// Keep the last panel canvas during collapse; SwiftUI must never negotiate a new window size.
-    var panelUsesDictationSize = false
+    /// The phase whose size the panel canvas keeps during collapse; SwiftUI must never negotiate a new window size.
+    var canvasPhase: NotchPhase = .expanded
     var basePhase: BasePhase = .idle
-    var section: Section = .clipboard
+    var chip: Chip = .all
     var query = ""
     var toast: Toast?
     var geometry: NotchGeometry
@@ -63,20 +57,20 @@ final class NotchState {
     var footerHint: String?
     /// Draw a clickable tab with an icon beside the idle notch.
     var showsNotchTab = true
+    var opensShelfOnHover = true
     var keepsAwake = false
     var clockText: String?
     var tabHovered = false
     /// Where the toast button sits, in the collapsed window's own coordinates, so clicks can find it.
     var toastActionRect: CGRect = .zero
     var toastActionHovered = false
-    /// Measured width of the status area, so the tab strip knows what the right band has left.
-    var headerStatusWidth: CGFloat = 0
 
     init(geometry: NotchGeometry) {
         self.geometry = geometry
     }
 
     var isExpanded: Bool { phase == .expanded }
+    var isShelf: Bool { phase == .shelf }
     var isDictating: Bool { phase == .dictation }
     var isOpen: Bool { phase != .collapsed }
 }

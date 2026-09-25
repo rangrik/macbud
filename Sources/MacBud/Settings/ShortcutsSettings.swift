@@ -28,12 +28,12 @@ private struct GlobalShortcutsSection: View {
             LabeledContent("Open MacBud") {
                 HotKeyRecorder(hotKey: $settings.toggleHotKey, onRecordingChanged: suspendHotKeys)
             }
-            ForEach(settings.sectionOrder) { section in
-                LabeledContent("Open \(section.title) directly") {
-                    HotKeyRecorder(hotKey: sectionBinding(section), onRecordingChanged: suspendHotKeys)
+            ForEach(Chip.allCases) { chip in
+                LabeledContent(chip == .all ? "Search everything" : "Open on \(chip.title)") {
+                    HotKeyRecorder(hotKey: chipBinding(chip), onRecordingChanged: suspendHotKeys)
                 }
-                .disabled(!settings.isEnabled(section.feature))
-                if let problem = hotKeys?.sectionProblems[section] {
+                .disabled(!settings.visibleChips.contains(chip))
+                if let problem = hotKeys?.chipProblems[chip] {
                     Label(problem, systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange).font(.callout)
                 }
             }
@@ -54,16 +54,16 @@ private struct GlobalShortcutsSection: View {
         } header: {
             Text("Global — work from any app")
         } footer: {
-            Text("Press the dictation shortcut again to stop and insert. Hold to talk records while its shortcut is held, then inserts on release. With no editable input, the text is copied. Escape cancels.")
+            Text("Open MacBud shows the shelf; hold it and let go to peek. The others open the island on one filter. Press the dictation shortcut again to stop and insert. Hold to talk records while its shortcut is held, then inserts on release. With no editable input, the text is copied. Escape cancels.")
         }
     }
 
-    private func sectionBinding(_ section: Section) -> Binding<HotKey?> {
-        Binding(get: { settings.sectionHotKeys[section] },
+    private func chipBinding(_ chip: Chip) -> Binding<HotKey?> {
+        Binding(get: { settings.chipHotKeys[chip] },
                 set: { newValue in
-                    var keys = settings.sectionHotKeys
-                    if let newValue { keys[section] = newValue } else { keys.removeValue(forKey: section) }
-                    settings.sectionHotKeys = keys
+                    var keys = settings.chipHotKeys
+                    if let newValue { keys[chip] = newValue } else { keys.removeValue(forKey: chip) }
+                    settings.chipHotKeys = keys
                 })
     }
 
@@ -79,34 +79,25 @@ private struct BindingGroupSection: View {
     var body: some View {
         SwiftUI.Section {
             ForEach(BindableCommand.allCases.filter { $0.group == group }, id: \.self) { command in
-                BindingRow(settings: settings, command: command, section: section(for: command))
-                    .disabled(command.sectionSlotIndex != nil && section(for: command) == nil)
+                BindingRow(settings: settings, command: command)
+                    .disabled(command.chipSlotIndex.map { !settings.visibleChips.contains(Chip.allCases[$0]) } ?? false)
             }
         } header: {
             Text(group == "General" ? "Inside the island — general" : "Inside the island — \(group.lowercased())")
         } footer: {
-            if group == "Sections" {
-                Text("Section shortcuts follow the tab order: ⌘1 is always the first tab. Reorder or hide tabs in Features.")
+            if group == "Filters" {
+                Text("Filters keep one order, so ⌘1 is always All and ⌘8 always Apps. On the shelf these open the island first.")
             }
         }
-    }
-
-    /// The section a ⌘1…⌘4 slot opens right now, or nil when the island shows fewer tabs than slots.
-    private func section(for command: BindableCommand) -> Section? {
-        guard let index = command.sectionSlotIndex else { return nil }
-        let sections = settings.enabledSections
-        return sections.indices.contains(index) ? sections[index] : nil
     }
 }
 
 private struct BindingRow: View {
     @Bindable var settings: AppSettings
     let command: BindableCommand
-    /// For a ⌘1…⌘4 slot, the section it currently lands on — the row names it so the mapping is visible.
-    var section: Section? = nil
 
     var body: some View {
-        LabeledContent(section.map { "\(command.title) — \($0.title)" } ?? command.title) {
+        LabeledContent(command.title) {
             HStack(spacing: 6) {
                 HotKeyRecorder(hotKey: chordBinding(slot: 0), requiresModifier: false, compact: true)
                 HotKeyRecorder(hotKey: chordBinding(slot: 1), requiresModifier: false, compact: true)

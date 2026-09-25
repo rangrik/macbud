@@ -9,7 +9,7 @@ import Testing
 
     @Test func framesHugTheScreenTopAndCentreOnTheNotch() {
         let m = NotchMetrics()
-        for frame in [m.expandedWindowFrame(for: geometry), m.dictationWindowFrame(for: geometry),
+        for frame in [m.panelFrame(.expanded, for: geometry), m.panelFrame(.shelf, for: geometry), m.panelFrame(.dictation, for: geometry),
                       m.collapsedWindowFrame(for: geometry, tab: true), m.collapsedWindowFrame(for: geometry, tab: false)] {
             #expect(frame.maxY == 1329)
             #expect(abs(frame.midX - 1028) < 0.01)
@@ -19,7 +19,7 @@ import Testing
         #expect(m.collapsedWindowFrame(for: geometry, tab: true).height == 38 + m.tabHoverGrowth.height)
         #expect(m.tabSize(for: geometry, hovered: false) == CGSize(width: 220 + m.tabExtension * 2, height: 38))
         #expect(m.tabSize(for: geometry, hovered: true).width == 220 + (m.tabExtension + m.tabHoverGrowth.width) * 2)
-        #expect(m.dictationWindowFrame(for: geometry).height == m.dictationSize.height)
+        #expect(m.panelFrame(.dictation, for: geometry).height == m.dictationSize.height)
     }
 
     @Test func everyBindableCommandHasADefaultChord() {
@@ -46,9 +46,9 @@ import Testing
         let controller = NotchController()
         defer { controller.close() }
         for screen in controller.screens {
-            controller.open(on: screen)
+            controller.open(.expanded, on: screen)
             #expect(controller.state.geometry.displayID == screen.displayID)
-            #expect(controller.panel.frame == controller.state.metrics.expandedWindowFrame(for: screen.geometry))
+            #expect(controller.panel.frame == controller.state.metrics.panelFrame(.expanded, for: screen.geometry))
             #expect(screen.isActive)
             #expect(controller.screens.filter(\.isActive).count == 1)
             controller.close()

@@ -32,12 +32,6 @@ final class ScreenshotLibrary {
 
     init() {}
 
-    func results(for query: String) -> [(item: MediaItem, match: SearchMatch)] {
-        let trimmed = query.trimmingCharacters(in: .whitespaces)
-        if trimmed.isEmpty { return items.map { ($0, SearchMatch(score: 0, ranges: [])) } }
-        return SearchMatcher.rank(items, query: trimmed, text: \.filename)
-    }
-
     func item(id: URL) -> MediaItem? { items.first { $0.url == id } }
 
     func requestRescan(delay: Duration = .milliseconds(400)) {

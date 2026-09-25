@@ -21,9 +21,9 @@ final class AppSettings {
     var includeSubfolders = false { didSet { set(includeSubfolders, "includeSubfolders") } }
     var includeVideos = true { didSet { set(includeVideos, "includeVideos") } }
     var toggleHotKey: HotKey? = .defaultToggle { didSet { setCodable(toggleHotKey, "toggleHotKey") } }
-    var sectionHotKeys: [Section: HotKey] = [:] { didSet { setCodable(sectionHotKeys, "sectionHotKeys") } }
-    var rememberLastSection = true { didSet { set(rememberLastSection, "rememberLastSection") } }
-    var lastSection: Section = .clipboard { didSet { set(lastSection.rawValue, "lastSection") } }
+    /// Global shortcuts that open the island on a chip. The key predates chips; `Chip` reads the old tab names.
+    var chipHotKeys: [Chip: HotKey] = [:] { didSet { setCodable(chipHotKeys, "sectionHotKeys") } }
+    var opensShelfOnHover = true { didSet { set(opensShelfOnHover, "opensShelfOnHover") } }
     var hasSeenWelcome = false { didSet { set(hasSeenWelcome, "hasSeenWelcome") } }
     var clipboardPaused = false { didSet { set(clipboardPaused, "clipboardPaused") } }
     var keyBindings: KeyBindings = .defaults { didSet { setCodable(keyBindings, "keyBindings") } }
@@ -40,15 +40,12 @@ final class AppSettings {
     var showNotchTab = true { didSet { set(showNotchTab, "showNotchTab") } }
     var prediction = PredictionConfig() { didSet { setCodable(prediction, "prediction") } }
     var hasConfiguredLaunchAtLogin = false { didSet { set(hasConfiguredLaunchAtLogin, "hasConfiguredLaunchAtLogin") } }
-    private(set) var sectionOrder: [Section] = Section.allCases {
-        didSet { set(sectionOrder.map(\.rawValue), "sectionOrder") }
-    }
     private(set) var disabledFeatures: Set<AppFeature> = [] {
         didSet { set(disabledFeatures.map(\.rawValue).sorted(), "disabledFeatures") }
     }
 
-    static let defaultSectionHotKeys: [Section: HotKey] = [
-        .clipboard: HotKey(keyCode: UInt16(kVK_ANSI_V), modifiers: [.option, .shift]),
+    static let defaultChipHotKeys: [Chip: HotKey] = [
+        .all: HotKey(keyCode: UInt16(kVK_ANSI_V), modifiers: [.option, .shift]),
         .snippets: HotKey(keyCode: UInt16(kVK_ANSI_S), modifiers: [.option, .shift]),
         .screenshots: HotKey(keyCode: UInt16(kVK_ANSI_4), modifiers: [.option, .shift]),
         .apps: HotKey(keyCode: UInt16(kVK_ANSI_A), modifiers: [.option, .shift]),
@@ -69,7 +66,7 @@ final class AppSettings {
         includeSubfolders = defaults.bool(forKey: "includeSubfolders")
         includeVideos = defaults.object(forKey: "includeVideos") as? Bool ?? true
         toggleHotKey = defaults.object(forKey: "toggleHotKey") == nil ? .defaultToggle : codable(HotKey.self, "toggleHotKey")
-        sectionHotKeys = defaults.object(forKey: "sectionHotKeys") == nil ? Self.defaultSectionHotKeys : (codable([Section: HotKey].self, "sectionHotKeys") ?? [:])
+        chipHotKeys = defaults.object(forKey: "sectionHotKeys") == nil ? Self.defaultChipHotKeys : (codable([Chip: HotKey].self, "sectionHotKeys") ?? [:])
         keyBindings = codable(KeyBindings.self, "keyBindings") ?? .defaults
         dictationHotKey = defaults.object(forKey: "dictationHotKey") == nil ? .defaultDictation : codable(HotKey.self, "dictationHotKey")
         holdToTalkHotKey = defaults.object(forKey: "holdToTalkHotKey") == nil ? .defaultHoldToTalk : codable(HotKey.self, "holdToTalkHotKey")
@@ -79,11 +76,9 @@ final class AppSettings {
         showNotchTab = defaults.object(forKey: "showNotchTab") as? Bool ?? true
         prediction = codable(PredictionConfig.self, "prediction") ?? PredictionConfig()
         hasConfiguredLaunchAtLogin = defaults.bool(forKey: "hasConfiguredLaunchAtLogin")
-        rememberLastSection = defaults.object(forKey: "rememberLastSection") as? Bool ?? true
-        lastSection = defaults.string(forKey: "lastSection").flatMap(Section.init(rawValue:)) ?? .clipboard
+        opensShelfOnHover = defaults.object(forKey: "opensShelfOnHover") as? Bool ?? true
         hasSeenWelcome = defaults.bool(forKey: "hasSeenWelcome")
         clipboardPaused = defaults.bool(forKey: "clipboardPaused")
-        sectionOrder = Self.normalizedSectionOrder((defaults.stringArray(forKey: "sectionOrder") ?? []).compactMap(Section.init(rawValue:)))
         disabledFeatures = Set((defaults.stringArray(forKey: "disabledFeatures") ?? []).compactMap(AppFeature.init(rawValue:)))
         isLoading = false
         backfillAppsHotKey()
@@ -92,31 +87,26 @@ final class AppSettings {
     /// Anyone upgrading already has a saved shortcut dictionary, so a section added after their last
     /// launch arrives with no global shortcut at all. Fill it in once, and never fight a later edit.
     private func backfillAppsHotKey() {
-        guard let wanted = Self.defaultSectionHotKeys[.apps], sectionHotKeys[.apps] == nil,
+        guard let wanted = Self.defaultChipHotKeys[.apps], chipHotKeys[.apps] == nil,
               !defaults.bool(forKey: "migratedAppsHotKey") else { return }
         defaults.set(true, forKey: "migratedAppsHotKey")
-        guard !sectionHotKeys.values.contains(wanted) else { return }
-        sectionHotKeys[.apps] = wanted
+        guard !chipHotKeys.values.contains(wanted) else { return }
+        chipHotKeys[.apps] = wanted
     }
 
-    var enabledSections: [Section] { sectionOrder.filter { isEnabled($0.feature) } }
+    /// Chips whose feature is on. All stays while anything it can show is on.
+    var visibleChips: [Chip] {
+        let chips = Chip.allCases.filter { $0.feature.map(isEnabled) ?? false }
+        return chips.contains { $0 != .apps } ? [.all] + chips : chips
+    }
+
+    /// The kinds of item the owner can reach now; hidden features drop out.
+    var visibleKinds: [IntentKind] { IntentKind.available(in: visibleChips) }
 
     func isEnabled(_ feature: AppFeature) -> Bool { !disabledFeatures.contains(feature) }
 
     func setEnabled(_ enabled: Bool, for feature: AppFeature) {
         if enabled { disabledFeatures.remove(feature) } else { disabledFeatures.insert(feature) }
-    }
-
-    func setSectionOrder(_ sections: [Section]) { sectionOrder = Self.normalizedSectionOrder(sections) }
-
-    func moveSection(_ section: Section, by offset: Int) {
-        guard let index = sectionOrder.firstIndex(of: section), sectionOrder.indices.contains(index + offset) else { return }
-        sectionOrder.swapAt(index, index + offset)
-    }
-
-    private static func normalizedSectionOrder(_ sections: [Section]) -> [Section] {
-        var seen: Set<Section> = []
-        return (sections + Section.allCases).filter { seen.insert($0).inserted }
     }
 
     var screenshotFolderURLs: [URL] { screenshotFolders.map { URL(fileURLWithPath: ($0 as NSString).expandingTildeInPath, isDirectory: true) } }
@@ -163,7 +153,7 @@ final class AppSettings {
     }
 }
 
-/// Predicted opening section. Stored as one value so new knobs do not each need a key.
+/// Predicted landing. Stored as one value so new knobs do not each need a key.
 nonisolated struct PredictionConfig: Codable, Equatable, Sendable {
     var enabled = true
     /// The kill switch for Codex; off means heuristics only.

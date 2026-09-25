@@ -3,73 +3,38 @@ import Testing
 @testable import MacBud
 
 @Suite @MainActor struct FeatureSettingsTests {
-    @Test func configurationPersistsWithoutLosingDisabledTabPositions() {
+    /// Seam: feature toggles → chips and kinds. Catches a hidden feature leaving its chip, or All, behind.
+    @Test func disabledFeaturesPersistAndHideTheirChips() {
         let defaults = UserDefaults(suiteName: UUID().uuidString)!
         let settings = AppSettings(defaults: defaults)
-        #expect(settings.enabledSections == Section.allCases)
-        #expect(AppFeature.allCases.allSatisfy(settings.isEnabled))
-        settings.setSectionOrder([.dictationHistory, .screenshots, .clipboard, .snippets])
-        settings.setEnabled(false, for: .screenshots)
+        #expect(settings.visibleChips == Chip.allCases)
+        settings.setEnabled(false, for: .clipboard)
         settings.setEnabled(false, for: .dictation)
-        settings.moveSection(.snippets, by: -1)
         let restored = AppSettings(defaults: defaults)
-        #expect(restored.sectionOrder == [.dictationHistory, .screenshots, .snippets, .clipboard, .apps])
-        #expect(restored.enabledSections == [.dictationHistory, .snippets, .clipboard, .apps])
-        #expect(!restored.isEnabled(.dictation))
-        restored.setEnabled(true, for: .screenshots)
-        #expect(restored.enabledSections == restored.sectionOrder)
+        #expect(restored.visibleChips == [.all, .screenshots, .dictations, .snippets, .apps])
+        #expect(!restored.visibleKinds.contains(.text) && restored.visibleKinds.contains(.dictation))
+        for feature in [AppFeature.screenshots, .dictationHistory, .snippets] { restored.setEnabled(false, for: feature) }
+        #expect(restored.visibleChips == [.apps], "All has nothing left to show")
     }
 
-    @Test func savedOrderRecoversUnknownMissingAndDuplicateIDs() {
+    /// Seam: settings written by 0.7.0 → this build. Catches the owner losing a shortcut to the redesign.
+    @Test func shortcutsSavedForTabsKeepWorkingOnChips() throws {
         let defaults = UserDefaults(suiteName: UUID().uuidString)!
-        defaults.set(["screenshots", "unknown", "screenshots"], forKey: "sectionOrder")
-        defaults.set(["unknown", "keepAwake"], forKey: "disabledFeatures")
+        // 0.7.0 saved global shortcuts by tab name, like this.
+        let saved = #"["clipboard",{"keyCode":9,"modifierRawValue":655360},"dictationHistory",{"keyCode":2,"modifierRawValue":655360},"apps",{"keyCode":4,"modifierRawValue":1048576}]"#
+        defaults.set(Data(saved.utf8), forKey: "sectionHotKeys")
         let settings = AppSettings(defaults: defaults)
-        #expect(settings.sectionOrder == [.screenshots, .clipboard, .snippets, .dictationHistory, .apps])
-        #expect(settings.disabledFeatures == [.keepAwake])
-        settings.moveSection(.screenshots, by: -1)
-        #expect(settings.sectionOrder.first == .screenshots)
-    }
+        #expect(settings.chipHotKeys.mapValues(\.keyCode) == [.all: 9, .dictations: 2, .apps: 4])
 
-    @Test func selectionAndKeyboardCyclingFollowEnabledOrder() {
-        let coordinator = makeCoordinator()
-        let settings = coordinator.settings
-        settings.setSectionOrder([.dictationHistory, .screenshots, .snippets, .clipboard])
-        coordinator.state.section = .screenshots
-        settings.setEnabled(false, for: .screenshots)
-        settings.setEnabled(false, for: .clipboard)
-        coordinator.applyFeatureSettings()
-        #expect(coordinator.state.section == .dictationHistory)
-        #expect(coordinator.handle(.nextSection))
-        #expect(coordinator.state.section == .snippets)
-        #expect(coordinator.handle(.nextSection))
-        #expect(coordinator.state.section == .apps)
-        #expect(coordinator.handle(.nextSection))
-        #expect(coordinator.state.section == .dictationHistory)
-        coordinator.select(.screenshots)
-        #expect(coordinator.state.section == .dictationHistory)
-        coordinator.open(section: .clipboard)
-        #expect(!coordinator.state.isOpen)
-    }
-
-    @Test func sectionShortcutsFollowTabPositions() {
-        let coordinator = makeCoordinator()
-        let settings = coordinator.settings
-        #expect(coordinator.handle(.selectSectionAt(1)))
-        #expect(coordinator.state.section == .snippets)
-        settings.setSectionOrder([.screenshots, .clipboard, .snippets, .dictationHistory])
-        #expect(coordinator.handle(.selectSectionAt(1)))
-        #expect(coordinator.state.section == .clipboard, "⌘2 follows whichever tab is second now")
-        settings.setEnabled(false, for: .clipboard)
-        coordinator.applyFeatureSettings()
-        #expect(coordinator.handle(.selectSectionAt(1)))
-        #expect(coordinator.state.section == .snippets, "a hidden tab closes the gap instead of skipping a number")
-        #expect(coordinator.handle(.selectSectionAt(3)))
-        #expect(coordinator.state.section == .apps, "⌘4 is now the Apps tab, fourth once Clipboard is hidden")
-        #expect(coordinator.handle(.selectSectionAt(4)))
-        #expect(coordinator.state.section == .apps, "there is no fifth tab, so nothing moves")
-        #expect(coordinator.sectionShortcut(at: 0)?.hasPrefix("⌘") == true)
-        #expect(coordinator.sectionShortcut(at: Section.allCases.count) == nil)
+        let tab = HotKey(keyCode: 48, modifiers: .control), two = HotKey(keyCode: 19, modifiers: .control)
+        let seven = HotKey(keyCode: 26, modifiers: .control), end = HotKey(keyCode: 28, modifiers: .command)
+        let chords = ["chords": ["nextSection": [tab], "selectSection2": [two], "selectSnippets": [seven], "moveToEnd": [end]]]
+        let bindings = try JSONDecoder().decode(KeyBindings.self, from: JSONEncoder().encode(chords))
+        #expect(bindings.chords(for: .nextChip) == [tab])
+        #expect(bindings.chords(for: .selectChip2) == [two], "a numbered slot keeps its number")
+        #expect(bindings.chords(for: .selectChip7) == [seven], "a per-tab command goes to its tab's chip")
+        #expect(bindings.chords(for: .selectChip6) == KeyBindings.defaults.chords(for: .selectChip6), "new commands get their defaults")
+        #expect(bindings.chords(for: .selectChip8).isEmpty, "but never a chord the owner gave to something else")
     }
 
     @Test func allFeaturesCanBeDisabledWithoutOpeningHiddenTools() {
@@ -80,23 +45,23 @@ import Testing
         coordinator.startHoldToTalk()
         #expect(!coordinator.dictation.isActive)
         #expect(!coordinator.isHoldingToTalk)
-        #expect(!coordinator.hasEnabledSection)
+        #expect(!coordinator.hasContent)
         #expect(coordinator.footerHints().isEmpty)
         #expect(!coordinator.handle(.saveAsSnippet))
-        coordinator.open()
-        #expect(coordinator.state.isExpanded)
+        coordinator.openShelf()
+        #expect(coordinator.state.isExpanded, "the island says how to turn features back on")
         coordinator.notch.close()
     }
 
     @Test func disablingSnippetsBlocksCrossFeatureCreationAndKeepsHistory() {
         let coordinator = makeCoordinator()
-        coordinator.state.section = .dictationHistory
+        coordinator.state.chip = .dictations
         coordinator.dictationHistoryStore.add("Keep this saved dictation")
         coordinator.settings.setEnabled(false, for: .snippets)
         let item = coordinator.dictationHistoryStore.items[0]
         coordinator.dictationHistory.saveAsSnippet(item)
         #expect(!coordinator.snippets.isEditing)
-        #expect(coordinator.state.section == .dictationHistory)
+        #expect(coordinator.state.chip == .dictations)
         #expect(!coordinator.footerHints().contains { $0.command == .saveAsSnippet })
         coordinator.settings.setEnabled(false, for: .dictationHistory)
         coordinator.applyFeatureSettings()
@@ -138,7 +103,7 @@ import Testing
         let hold = HotKey(keyCode: 90, modifiers: [.control, .option, .command])
         let screenshots = HotKey(keyCode: 80, modifiers: [.control, .shift, .command])
         settings.toggleHotKey = nil
-        settings.sectionHotKeys = [.screenshots: screenshots]
+        settings.chipHotKeys = [.screenshots: screenshots]
         settings.dictationHotKey = toggle
         settings.holdToTalkHotKey = hold
         let binder = HotKeyBinder(settings: settings, coordinator: coordinator)

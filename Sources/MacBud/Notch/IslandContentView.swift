@@ -1,44 +1,21 @@
 import SwiftUI
 
-/// The island body: header band beside the notch, search row, section body, footer hints.
+/// The expanded island: the notch band with Keep Alive, search, chips, then items or apps, and the footer.
 struct IslandContentView: View {
     @Bindable var state: NotchState
     let coordinator: PanelCoordinator
     @FocusState private var searchFocused: Bool
 
     var body: some View {
-        let notchWidth = state.geometry.notchRect.width
-        let sideWidth = (state.metrics.islandSize.width - notchWidth) / 2
-        let sections = coordinator.settings.enabledSections
-        // The right band shares its space with the status area, whose width we measure rather than
-        // guess — a stale guess would either hide a tab or refuse a split that would have fitted.
-        let plan = SectionTabLayout.plan(sections, selected: state.section,
-                                         leftWidth: sideWidth - 14,
-                                         rightWidth: sideWidth - 18 - state.headerStatusWidth - 10)
         VStack(spacing: 0) {
-            HStack(spacing: 0) {
-                SectionTabs(sections: indexed(plan.left, in: sections), selected: state.section,
-                            showsLabel: plan.showsLabel,
-                            shortcut: { coordinator.sectionShortcut(at: $0) }) { coordinator.select($0) }
-                    .padding(.leading, 14)
-                    .frame(width: sideWidth, alignment: .leading)
-                Spacer().frame(width: notchWidth)
-                HStack(spacing: 10) {
-                    SectionTabs(sections: indexed(plan.right, in: sections), selected: state.section,
-                                showsLabel: plan.showsLabel,
-                                shortcut: { coordinator.sectionShortcut(at: $0) }) { coordinator.select($0) }
-                    HeaderStatus(coordinator: coordinator)
-                        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { state.headerStatusWidth = $0 }
+            NotchBand(state: state)
+                .overlay(alignment: .trailing) {
+                    if coordinator.settings.isEnabled(.keepAwake) { KeepAliveSwitch(coordinator: coordinator).padding(.trailing, 18) }
                 }
-                .padding(.trailing, 18)
-                .frame(width: sideWidth, alignment: .trailing)
-            }
-            .frame(height: state.geometry.notchRect.height)
-
-            if !coordinator.hasEnabledSection {
+            if !coordinator.hasContent {
                 VStack(spacing: 12) {
                     Text("Choose your features").font(.headline)
-                    Text("Enable a section in Settings to show it here.").foregroundStyle(.secondary)
+                    Text("Turn on a feature in Settings to show it here.").foregroundStyle(.secondary)
                     Button("Open Settings") { coordinator.openSettings() }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -46,9 +23,17 @@ struct IslandContentView: View {
                 WelcomeView(coordinator: coordinator)
             } else {
                 SearchRow(state: state, coordinator: coordinator, focused: $searchFocused)
+                ChipRow(coordinator: coordinator)
+                    .padding(.bottom, 10)
                 Rectangle().fill(Theme.separator).frame(height: 1)
-                sectionBody
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                Group {
+                    if state.chip == .apps {
+                        AppsSectionView(controller: coordinator.apps, previews: coordinator.windowPreviews)
+                    } else {
+                        ItemsBody(coordinator: coordinator)
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
                 Rectangle().fill(Theme.separator).frame(height: 1)
                 FooterBar(state: state, coordinator: coordinator)
             }
@@ -56,94 +41,28 @@ struct IslandContentView: View {
         .onChange(of: state.wantsSearchFocus, initial: true) { _, wants in searchFocused = wants }
         .onChange(of: state.query) { coordinator.queryChanged() }
     }
-
-    /// Tabs keep their position in the full list so the ⌘-number shortcuts stay put across a split.
-    private func indexed(_ run: [Section], in all: [Section]) -> [(index: Int, section: Section)] {
-        run.compactMap { section in all.firstIndex(of: section).map { (index: $0, section: section) } }
-    }
-
-    @ViewBuilder private var sectionBody: some View {
-        switch state.section {
-        case .clipboard: ClipboardSectionView(controller: coordinator.clipboard)
-        case .snippets: SnippetsSectionView(controller: coordinator.snippets)
-        case .screenshots: ScreenshotsSectionView(controller: coordinator.screenshots)
-        case .dictationHistory: DictationHistorySectionView(controller: coordinator.dictationHistory)
-        case .apps: AppsSectionView(controller: coordinator.apps, previews: coordinator.windowPreviews)
-        }
-    }
 }
 
-struct SectionTabs: View {
-    /// Each tab keeps its position in the full list, so ⌘-number shortcuts survive a split.
-    let sections: [(index: Int, section: Section)]
-    let selected: Section
-    /// False when neither band is wide enough for the selected tab's label.
-    var showsLabel = true
-    /// The chord that opens each tab position, so a tooltip can say which one this tab answers to.
-    let shortcut: (Int) -> String?
-    let onSelect: (Section) -> Void
-
-    var body: some View {
-        GlassEffectContainer(spacing: 6) {
-            HStack(spacing: 4) {
-                ForEach(sections, id: \.section) { index, section in
-                    let isSelected = section == selected
-                    Button { onSelect(section) } label: {
-                    HStack(spacing: 6) {
-                        FeatureBadge(kind: section.artwork, size: 19)
-                        if isSelected, showsLabel {
-                            Text(section.title)
-                                .font(.system(size: 11.5, weight: .semibold))
-                                .fixedSize()
-                        }
-                    }
-                    .foregroundStyle(isSelected ? Theme.textPrimary : Theme.textTertiary)
-                    .padding(.horizontal, isSelected && showsLabel ? 10 : 8)
-                    .frame(height: 24)
-                    .glassEffect(isSelected ? .regular.tint(.white.opacity(0.16)) : .identity, in: .capsule)
-                    .contentShape(Capsule())
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel(section.title)
-                    .accessibilityAddTraits(isSelected ? .isSelected : [])
-                    .help(shortcut(index).map { "\(section.title) (\($0))" } ?? section.title)
-                }
-            }
-        }
-        .animation(.snappy(duration: 0.22), value: selected)
-    }
-}
-
-struct HeaderStatus: View {
+struct KeepAliveSwitch: View {
     let coordinator: PanelCoordinator
 
     var body: some View {
-        HStack(spacing: 8) {
-            if let clock = coordinator.clockText {
-                Text(clock)
-                    .font(.system(size: 12, weight: .medium).monospacedDigit())
-                    .foregroundStyle(Theme.textSecondary)
-                    .accessibilityLabel("Time \(clock)")
-            }
-            if coordinator.settings.isEnabled(.keepAwake) {
-            HStack(spacing: 5) {
-                FeatureBadge(kind: .keepAwake, size: 21)
-                Text("Keep Alive")
-                Toggle("Keep Alive", isOn: Binding(
-                    get: { coordinator.keepAwake.isActive },
-                    set: { coordinator.keepAwake.setEnabled($0) }
-                ))
-                .labelsHidden()
-                .toggleStyle(.switch)
-                .controlSize(.mini)
-                .fixedSize()
-                .help(coordinator.keepAwake.errorMessage ?? "Keep your Mac awake until you turn this off")
-                .accessibilityIdentifier("keepAwakeToggle")
-            }
-            .font(.system(size: 11, weight: .medium))
-            .foregroundStyle(Theme.textSecondary)
-            }
+        HStack(spacing: 5) {
+            FeatureBadge(kind: .keepAwake, size: 21)
+            Text("Keep Alive")
+            Toggle("Keep Alive", isOn: Binding(
+                get: { coordinator.keepAwake.isActive },
+                set: { coordinator.keepAwake.setEnabled($0) }
+            ))
+            .labelsHidden()
+            .toggleStyle(.switch)
+            .controlSize(.mini)
+            .fixedSize()
+            .help(coordinator.keepAwake.errorMessage ?? "Keep your Mac awake until you turn this off")
+            .accessibilityIdentifier("keepAwakeToggle")
         }
+        .font(.system(size: 11, weight: .medium))
+        .foregroundStyle(Theme.textSecondary)
     }
 }
 
@@ -158,18 +77,19 @@ struct SearchRow: View {
             Image(systemName: "magnifyingglass")
                 .font(.system(size: 14, weight: .medium))
                 .foregroundStyle(Theme.textTertiary)
+            let placeholder = state.chip == .all ? "Search everything…" : "Search \(state.chip.title.lowercased())…"
             if snapshotMode {
-                Text(state.query.isEmpty ? state.section.searchPlaceholder : state.query)
+                Text(state.query.isEmpty ? placeholder : state.query)
                     .font(Theme.search)
                     .foregroundStyle(state.query.isEmpty ? Theme.textTertiary : Theme.textPrimary)
                     .frame(maxWidth: .infinity, alignment: .leading)
             } else {
-            TextField("", text: $state.query, prompt: Text(state.section.searchPlaceholder).foregroundStyle(Theme.textTertiary))
+            TextField("", text: $state.query, prompt: Text(placeholder).foregroundStyle(Theme.textTertiary))
                 .textFieldStyle(.plain)
                 .font(Theme.search)
                 .foregroundStyle(Theme.textPrimary)
                 .focused(focused)
-                .disabled(coordinator.snippets.isEditing && state.section == .snippets)
+                .disabled(coordinator.snippets.isEditing)
             }
 
         }

@@ -6,7 +6,7 @@ nonisolated enum BindableCommand: String, CaseIterable, Codable, Sendable {
     case moveUp, moveDown, moveLeft, moveRight, pageUp, pageDown, moveToStart, moveToEnd
     case primaryAction, secondaryAction
     case delete, clearAll, togglePin, saveAsSnippet, newItem, editItem, revealInFinder, quickLook
-    case nextSection, previousSection, selectSection1, selectSection2, selectSection3, selectSection4, selectSection5
+    case nextChip, previousChip, selectChip1, selectChip2, selectChip3, selectChip4, selectChip5, selectChip6, selectChip7, selectChip8
     case startDictation, close, openSettings
 
     var panelCommand: PanelCommand {
@@ -29,13 +29,10 @@ nonisolated enum BindableCommand: String, CaseIterable, Codable, Sendable {
         case .editItem: .editItem
         case .revealInFinder: .revealInFinder
         case .quickLook: .quickLook
-        case .nextSection: .nextSection
-        case .previousSection: .previousSection
-        case .selectSection1: .selectSectionAt(0)
-        case .selectSection2: .selectSectionAt(1)
-        case .selectSection3: .selectSectionAt(2)
-        case .selectSection4: .selectSectionAt(3)
-        case .selectSection5: .selectSectionAt(4)
+        case .nextChip: .nextChip
+        case .previousChip: .previousChip
+        case .selectChip1, .selectChip2, .selectChip3, .selectChip4, .selectChip5, .selectChip6, .selectChip7, .selectChip8:
+            .selectChip(Chip.allCases[chipSlotIndex ?? 0])
         case .startDictation: .startDictation
         case .close: .close
         case .openSettings: .openSettings
@@ -62,13 +59,10 @@ nonisolated enum BindableCommand: String, CaseIterable, Codable, Sendable {
         case .editItem: "Edit snippet"
         case .revealInFinder: "Reveal in Finder"
         case .quickLook: "Quick Look"
-        case .nextSection: "Next section"
-        case .previousSection: "Previous section"
-        case .selectSection1: "Go to section 1"
-        case .selectSection2: "Go to section 2"
-        case .selectSection3: "Go to section 3"
-        case .selectSection4: "Go to section 4"
-        case .selectSection5: "Go to section 5"
+        case .nextChip: "Next filter"
+        case .previousChip: "Previous filter"
+        case .selectChip1, .selectChip2, .selectChip3, .selectChip4, .selectChip5, .selectChip6, .selectChip7, .selectChip8:
+            "Filter \((chipSlotIndex ?? 0) + 1) — \(Chip.allCases[chipSlotIndex ?? 0].title)"
         case .startDictation: "Start dictation"
         case .close: "Close"
         case .openSettings: "Open Settings"
@@ -79,22 +73,19 @@ nonisolated enum BindableCommand: String, CaseIterable, Codable, Sendable {
         switch self {
         case .moveUp, .moveDown, .moveLeft, .moveRight, .pageUp, .pageDown, .moveToStart, .moveToEnd: "Navigation"
         case .primaryAction, .secondaryAction, .delete, .clearAll, .togglePin, .saveAsSnippet, .newItem, .editItem, .revealInFinder, .quickLook: "Actions"
-        case .nextSection, .previousSection, .selectSection1, .selectSection2, .selectSection3, .selectSection4, .selectSection5: "Sections"
+        case .nextChip, .previousChip, .selectChip1, .selectChip2, .selectChip3, .selectChip4, .selectChip5, .selectChip6,
+             .selectChip7, .selectChip8: "Filters"
         case .startDictation, .close, .openSettings: "General"
         }
     }
 
-    static let groups = ["Navigation", "Actions", "Sections", "General"]
+    static let groups = ["Navigation", "Actions", "Filters", "General"]
 
-    /// ⌘1…⌘4 address tab positions, so they follow the order set in Settings › Features.
-    /// One slot per section: `sectionSlotsCoverEverySection` keeps the two lists in step.
-    static let sectionSlots: [BindableCommand] = [.selectSection1, .selectSection2, .selectSection3, .selectSection4, .selectSection5]
+    /// One slot per chip, in the chip row's fixed order.
+    static let chipSlots: [BindableCommand] = [.selectChip1, .selectChip2, .selectChip3, .selectChip4,
+                                               .selectChip5, .selectChip6, .selectChip7, .selectChip8]
 
-    static func sectionSlot(at index: Int) -> BindableCommand? {
-        sectionSlots.indices.contains(index) ? sectionSlots[index] : nil
-    }
-
-    var sectionSlotIndex: Int? { Self.sectionSlots.firstIndex(of: self) }
+    var chipSlotIndex: Int? { Self.chipSlots.firstIndex(of: self) }
 }
 
 /// User-editable map from island commands to key chords. A command may have up to two chords.
@@ -126,13 +117,16 @@ nonisolated struct KeyBindings: Codable, Equatable, Sendable {
         .editItem: [key(kVK_ANSI_E, .command)],
         .revealInFinder: [key(kVK_ANSI_R, .command)],
         .quickLook: [key(kVK_ANSI_Y, .command)],
-        .nextSection: [key(kVK_Tab)],
-        .previousSection: [key(kVK_Tab, .shift)],
-        .selectSection1: [key(kVK_ANSI_1, .command)],
-        .selectSection2: [key(kVK_ANSI_2, .command)],
-        .selectSection3: [key(kVK_ANSI_3, .command)],
-        .selectSection4: [key(kVK_ANSI_4, .command)],
-        .selectSection5: [key(kVK_ANSI_5, .command)],
+        .nextChip: [key(kVK_Tab)],
+        .previousChip: [key(kVK_Tab, .shift)],
+        .selectChip1: [key(kVK_ANSI_1, .command)],
+        .selectChip2: [key(kVK_ANSI_2, .command)],
+        .selectChip3: [key(kVK_ANSI_3, .command)],
+        .selectChip4: [key(kVK_ANSI_4, .command)],
+        .selectChip5: [key(kVK_ANSI_5, .command)],
+        .selectChip6: [key(kVK_ANSI_6, .command)],
+        .selectChip7: [key(kVK_ANSI_7, .command)],
+        .selectChip8: [key(kVK_ANSI_8, .command)],
         .startDictation: [key(kVK_ANSI_D, .command)],
         .close: [key(kVK_Escape)],
         .openSettings: [key(kVK_ANSI_Comma, .command)],
@@ -140,21 +134,29 @@ nonisolated struct KeyBindings: Codable, Equatable, Sendable {
 
     private enum CodingKeys: String, CodingKey { case chords }
 
-    /// ⌘1…⌘4 used to name a fixed section. Settings saved before that moved to tab positions keep
-    /// their chords: each old command hands them to the slot its section held in the default order.
-    private static let legacySectionCommands: [(key: String, section: Section)] = [
-        ("selectClipboard", .clipboard), ("selectSnippets", .snippets),
-        ("selectScreenshots", .screenshots), ("selectDictationHistory", .dictationHistory),
+    /// Chords saved for the tabs keep working: numbered slots keep their number, and the older
+    /// per-tab commands go to their tab's chip.
+    private static let renamed: [(old: String, new: BindableCommand)] = [
+        ("nextSection", .nextChip), ("previousSection", .previousChip),
+        ("selectSection1", .selectChip1), ("selectSection2", .selectChip2), ("selectSection3", .selectChip3),
+        ("selectSection4", .selectChip4), ("selectSection5", .selectChip5),
+        ("selectClipboard", .selectChip1), ("selectScreenshots", .selectChip5),
+        ("selectDictationHistory", .selectChip6), ("selectSnippets", .selectChip7),
     ]
 
     init(from decoder: any Decoder) throws {
         var stored = try decoder.container(keyedBy: CodingKeys.self).decode([String: [HotKey]].self, forKey: .chords)
-        for (key, section) in Self.legacySectionCommands {
-            guard let migrated = stored.removeValue(forKey: key),
-                  let slot = BindableCommand.sectionSlot(at: section.index), stored[slot.rawValue] == nil else { continue }
-            stored[slot.rawValue] = migrated
+        for (old, new) in Self.renamed {
+            guard let chords = stored.removeValue(forKey: old), stored[new.rawValue] == nil else { continue }
+            stored[new.rawValue] = chords
         }
-        chords = stored.filter { BindableCommand(rawValue: $0.key) != nil }
+        stored = stored.filter { BindableCommand(rawValue: $0.key) != nil }
+        // Commands added since the save get their defaults, unless that chord is already taken.
+        let taken = Set(stored.values.joined())
+        for command in BindableCommand.allCases where stored[command.rawValue] == nil {
+            stored[command.rawValue] = Self.defaults.chords(for: command).filter { !taken.contains($0) }
+        }
+        chords = stored
     }
 
     func chords(for command: BindableCommand) -> [HotKey] { chords[command.rawValue] ?? [] }

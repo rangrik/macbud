@@ -1,7 +1,9 @@
 import AppKit
 
 /// URL-scheme control surface. `open`/`close`/`toggle` always work so Shortcuts or Raycast can drive
-/// the island; input-injecting and introspection commands need `MACBUD_AUTOMATION=1` in the environment.
+/// the island: `open` is a plain open (the shelf), `open?chip=apps` the island on a chip, and
+/// `open?focus=0` a shelf that leaves the keyboard alone, as a hover does. Input-injecting and
+/// introspection commands need `MACBUD_AUTOMATION=1` in the environment.
 enum Automation {
     static var isEnabled: Bool { ProcessInfo.processInfo.environment["MACBUD_AUTOMATION"] == "1" }
     static let notificationName = Notification.Name("com.rangrik.macbud.automation")
@@ -24,7 +26,9 @@ enum Automation {
         Log.app.info("automation: \(command) \(params)")
         Trace.log("automation \(command) \(params) active=\(NSApp.isActive) key=\(app.notch.panel.isKeyWindow)")
         switch command {
-        case "open": app.coordinator.open(section: params["section"].flatMap(Section.init(rawValue:)))
+        case "open":
+            if let chip = params["chip"].flatMap(Chip.init(rawValue:)) { app.coordinator.open(chip: chip) }
+            else { app.coordinator.openShelf(focus: params["focus"] != "0") }
         case "close": app.notch.close()
         case "toggle": app.coordinator.toggle()
         default:
