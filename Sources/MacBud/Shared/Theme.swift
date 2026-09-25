@@ -74,6 +74,7 @@ struct KeyHint: View {
             Text(label)
                 .font(.system(size: 11))
                 .foregroundStyle(emphasized ? Theme.textSecondary : Theme.textTertiary)
+                .lineLimit(1)
         }
     }
 }

@@ -118,6 +118,7 @@ final class PanelCoordinator {
             if focus { prepareToOpen(); notch.open(.expanded, on: screen) }
             return
         }
+        let started = ContinuousClock.now
         prepareToOpen()
         let recents = shelf.recents
         func landing(_ intent: LandingIntent?) -> Landing {
@@ -130,6 +131,7 @@ final class PanelCoordinator {
         notch.open(landed.expanded ? .expanded : .shelf, focus: focus, on: screen)
         shelf.select(landed.card)
         if state.chip == .apps { apps.didShow() }
+        Trace.log("plain open \(landed.place) focus=\(focus) took=\(ContinuousClock.now - started)")
     }
 
     /// Per-chip hotkeys and menu items go straight to the island on that chip. Not scored.
@@ -258,7 +260,7 @@ final class PanelCoordinator {
 
     func handle(event: NSEvent) -> Bool {
         guard let command = KeyRouter.command(for: event, bindings: settings.keyBindings) else {
-            return typeIntoShelf(event)
+            return typeIntoSearch(event)
         }
         if command == .startDictation, !state.isDictating, !snippets.isEditing {
             startDictation(trigger: HotKey(keyCode: event.keyCode, modifiers: event.modifierFlags))
@@ -267,10 +269,13 @@ final class PanelCoordinator {
         return handle(command)
     }
 
-    /// Typing on the shelf opens the island with the search already started.
-    private func typeIntoShelf(_ event: NSEvent) -> Bool {
-        guard state.isShelf, event.modifierFlags.intersection([.command, .control]).isEmpty,
-              let text = event.characters, text.contains(where: { !$0.isWhitespace && !$0.isNewline }),
+    /// Typing on the shelf opens the island with the search started. Keys that arrive before the
+    /// search field has focus would be lost, so they go into the query too.
+    private func typeIntoSearch(_ event: NSEvent) -> Bool {
+        let fieldReady = notch.panel.firstResponder is NSTextView
+        guard state.isShelf || (state.isExpanded && !fieldReady && !showsWelcome && !snippets.isEditing),
+              event.modifierFlags.intersection([.command, .control]).isEmpty,
+              let text = event.characters, text.contains(where: { !$0.isWhitespace && !$0.isNewline }) || !state.query.isEmpty,
               text.unicodeScalars.allSatisfy({ !CharacterSet.controlCharacters.contains($0) }) else { return false }
         expand()
         state.query += text

@@ -65,8 +65,12 @@ final class ShelfController {
     }
 
     var selected: ShelfItem? {
-        let reachable = reachable
-        return reachable.first { $0.id == selectedID } ?? reachable.first
+        if state.isShelf {
+            let recents = recents
+            return recents.first { $0.id == selectedID } ?? recents.first
+        }
+        let (cards, rows) = layout
+        return cards.first { $0.id == selectedID } ?? rows.first { $0.id == selectedID } ?? cards.first ?? rows.first
     }
 
     func select(_ id: String?) { selectedID = id ?? reachable.first?.id }
