@@ -66,6 +66,7 @@ import Testing
         // The pointer wins even when the focused window sits on the other display.
         #expect(ActiveDisplay.choose(focusedWindow: onExternal, mouse: mouseOnBuiltIn, frames: frames) == 0)
         #expect(ActiveDisplay.choose(focusedWindow: onBuiltIn, mouse: CGPoint(x: 2000, y: 200), frames: frames) == 1)
+        #expect(ActiveDisplay.choose(focusedWindow: onBuiltIn, mouse: CGPoint(x: 2000, y: 1440), frames: frames) == 1)
         let mouseOffscreen = CGPoint(x: -50, y: -50)
         #expect(ActiveDisplay.choose(focusedWindow: onExternal, mouse: mouseOffscreen, frames: frames) == 1)
         // A fallback window straddling both displays belongs to whichever shows more of it.

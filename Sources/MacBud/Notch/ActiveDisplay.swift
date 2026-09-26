@@ -12,7 +12,8 @@ enum ActiveDisplay {
 
     /// Defer accessibility until the pointer misses every display.
     nonisolated static func choose(focusedWindow: @autoclosure () -> CGRect?, mouse: CGPoint, frames: [CGRect]) -> Int? {
-        if let index = frames.firstIndex(where: { $0.contains(mouse) }) { return index }
+        // AppKit counts the top row as inside the screen.
+        if let index = frames.firstIndex(where: { NSMouseInRect(mouse, $0, false) }) { return index }
         if let focusedWindow = focusedWindow(), let best = frames.indices
             .map({ ($0, frames[$0].intersection(focusedWindow)) })
             .filter({ !$0.1.isNull && !$0.1.isEmpty })

@@ -1,3 +1,11 @@
+# Latest update — include the screen’s top row (2026-09-26)
+
+QA issue 1: `ActiveDisplay.choose` now uses `NSMouseInRect(mouse, frame, false)` so a pointer on a display’s top row belongs to that display. `CGRect.contains` excluded the top edge, which selected the screen above or fell back to the focused window. The existing chooser test now includes the external display’s top row with focus on the built-in.
+
+Verification: **136 tests in 25 suites passed** in the unfiltered xcodebuild run, with no `Failing tests:` line. Debug and Release builds passed; Release reported zero warnings and strict signature verification passed. Live `make run` + `mbctl toggle`: pointer (200, 3489) opened a key shelf on external display 2; pointer (200, 1329) opened a key shelf on built-in display 1, with `retarget display=1`. Both rendered shelf snapshots were inspected. The pointer was restored and this worktree’s Debug app stopped. Tests and live app used a disposable home; no owner memory files were edited or prediction sessions/strategies created. Physical hotkey delivery remains unverified; the toggle handler was driven through `mbctl`.
+
+---
+
 # Latest update — pointer-first shelf screen (2026-09-25)
 
 `ActiveDisplay.choose` now chooses the screen under the pointer before falling back to the focused window, then the caller’s existing default screen. The focused-window argument is lazy, so normal opens skip the accessibility lookup and its possible 200 ms timeout. The same rule applies when dictation retargets an open shelf; explicit notch-tab clicks still target their own screen.
