@@ -89,16 +89,28 @@ struct CardRow: View {
     let spacing: CGFloat
     let coordinator: PanelCoordinator
     var selectsOnHover = false
+    @State private var hoveredID: String?
 
     var body: some View {
         HStack(alignment: .top, spacing: spacing) {
             ForEach(cards) { item in
                 ShelfCard(item: item, isSelected: item.id == selectedID, width: cardWidth, clipboard: coordinator.clipboardStore)
                     .onTapGesture { coordinator.shelf.use(item) }
-                    .onHover { inside in if inside, selectsOnHover { coordinator.shelf.selectedID = item.id } }
+                    .onHover { inside in
+                        guard selectsOnHover else { return }
+                        if inside { hoveredID = item.id }
+                        else if hoveredID == item.id { hoveredID = nil }
+                    }
             }
             Spacer(minLength: 0)
         }
+        .task(id: hoveredID) {
+            guard let hoveredID else { return }
+            try? await Task.sleep(for: HoverDwell.delay)
+            guard !Task.isCancelled else { return }
+            coordinator.shelf.selectedID = hoveredID
+        }
+        .onChange(of: selectedID) { hoveredID = nil }
     }
 }
 
