@@ -1,10 +1,7 @@
 import AppKit
 import ApplicationServices
 
-/// Which display the user is working on right now.
-///
-/// The focused window wins, because that is where the typing is going. The pointer is the
-/// fallback for apps that refuse accessibility, and the menu-bar screen is the last resort.
+/// Follow the pointer, then the focused window, then the menu-bar screen.
 enum ActiveDisplay {
     static func screen() -> NSScreen? {
         let index = choose(focusedWindow: focusedWindowFrame(), mouse: NSEvent.mouseLocation,
@@ -13,13 +10,14 @@ enum ActiveDisplay {
         return NSScreen.screens[index]
     }
 
-    /// Focused window first, pointer second. Pure, so the priority rules are testable without hardware.
-    nonisolated static func choose(focusedWindow: CGRect?, mouse: CGPoint, frames: [CGRect]) -> Int? {
-        if let focusedWindow, let best = frames.indices
+    /// Defer accessibility until the pointer misses every display.
+    nonisolated static func choose(focusedWindow: @autoclosure () -> CGRect?, mouse: CGPoint, frames: [CGRect]) -> Int? {
+        if let index = frames.firstIndex(where: { $0.contains(mouse) }) { return index }
+        if let focusedWindow = focusedWindow(), let best = frames.indices
             .map({ ($0, frames[$0].intersection(focusedWindow)) })
             .filter({ !$0.1.isNull && !$0.1.isEmpty })
             .max(by: { $0.1.width * $0.1.height < $1.1.width * $1.1.height }) { return best.0 }
-        return frames.firstIndex { $0.contains(mouse) }
+        return nil
     }
 
     /// Accessibility reports window frames flipped from the top of the primary display.
@@ -32,7 +30,7 @@ enum ActiveDisplay {
               app.processIdentifier != ProcessInfo.processInfo.processIdentifier,
               let primaryHeight = NSScreen.screens.first?.frame.maxY else { return nil }
         let application = AXUIElementCreateApplication(app.processIdentifier)
-        // A hung app must never stall the hot key; fall through to the pointer instead.
+        // A hung app must never stall the hot key; fall through to the menu-bar screen.
         AXUIElementSetMessagingTimeout(application, 0.2)
         guard let window = element(kAXFocusedWindowAttribute, on: application),
               let position = value(kAXPositionAttribute, on: window, type: .cgPoint, as: CGPoint.self),
