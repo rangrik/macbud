@@ -1,3 +1,13 @@
+# Latest update — Keep Alive on both open bands (2026-09-25, 0.8.6)
+
+The shelf and expanded island share the Keep Alive label and switch at the band’s trailing edge, with the existing 18-point inset. `NotchBand` owns the feature-gated overlay; the sun badge and its unused `FeatureArt` case are gone. The MacBud mark, closed band, geometry, tooltip, accessibility identifier, and Keep Alive controller are unchanged.
+
+Verification: independent QA reported **8 pass / 0 fail**. **136 tests in 25 suites passed** in the unfiltered xcodebuild run; Release built without warnings and strict signature verification passed. Real clicks toggled Keep Alive on key and hover-opened non-key shelves, with the mark changing color and the expected power assertions. Settings → Features hid and restored the strip on both bands. Pixel comparisons against the previous main showed only the removed badge, clock digits and switch antialiasing; the closed band’s geometry was identical. Existing automation enabled Keep Alive on both bands. No new tests were added for this layout-only change.
+
+Follow-ups: the unchanged tooltip was not seen with synthetic hover on either main or this branch. `CFFIXED_USER_HOME` isolates App Support but not preferences; QA’s Clock checkbox test left the owner’s persisted Clock feature disabled, as reported in qa-report.md. That side effect and the isolation recipe remain follow-ups at the user’s direction. Physical hotkey delivery and live dictation were not exercised. QA made no pasteboard writes or manual owner-memory edits. Existing test-target warnings do not appear in Release.
+
+---
+
 # Latest update — pointer-first shelf screen (2026-09-25, 0.8.5)
 
 The shelf now opens on the screen under the pointer, including its top row. `ActiveDisplay.choose` uses `NSMouseInRect` to include that row and only reads the focused window when the pointer misses every display, avoiding the accessibility lookup’s possible 200 ms timeout. The focused window then wins by largest overlap; the caller’s last resort is `NSScreen.main` (the key window’s screen), then the first display. Dictation uses the same priority when retargeting an open shelf; notch-tab clicks still target their own screen.

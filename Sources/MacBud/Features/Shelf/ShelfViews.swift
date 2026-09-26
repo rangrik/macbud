@@ -10,7 +10,7 @@ struct ShelfView: View {
         let cards = shelf.recents
         VStack(spacing: 0) {
             // Clicking the notch on a hover-opened shelf is asking for the keyboard, as clicking the closed tab is.
-            NotchBand(state: coordinator.state)
+            NotchBand(coordinator: coordinator)
                 .contentShape(Rectangle())
                 .onTapGesture { coordinator.notch.focusShelf() }
             if cards.isEmpty {
@@ -33,13 +33,17 @@ struct ShelfView: View {
 
 /// The clock and logo where the closed notch shows them, so opening does not move them.
 struct NotchBand: View {
-    @Bindable var state: NotchState
+    let coordinator: PanelCoordinator
 
     var body: some View {
+        let state = coordinator.state
         NotchTabContent(state: state, isOpen: true, notchWidth: state.geometry.notchRect.width,
                         wing: state.metrics.tabExtension, height: state.geometry.notchRect.height)
             .frame(maxWidth: .infinity)
             .frame(height: state.geometry.notchRect.height)
+            .overlay(alignment: .trailing) {
+                if coordinator.settings.isEnabled(.keepAwake) { KeepAliveSwitch(coordinator: coordinator).padding(.trailing, 18) }
+            }
     }
 }
 
