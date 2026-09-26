@@ -23,11 +23,13 @@ struct ShelfView: View {
                         coordinator: coordinator, selectsOnHover: true)
                     .padding(.horizontal, 14)
                     .padding(.top, 6)
-                Rectangle().fill(Theme.separator).frame(height: 1)
-                    .padding(.top, 8)
-                ItemPreview(item: shelf.selected, coordinator: coordinator)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                Rectangle().fill(Theme.separator).frame(height: 1)
+                if coordinator.state.metrics.shelfSize.height == NotchMetrics.shelfHeight(hasCards: true) {
+                    Rectangle().fill(Theme.separator).frame(height: 1)
+                        .padding(.top, 8)
+                    ItemPreview(item: shelf.selected, coordinator: coordinator)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    Rectangle().fill(Theme.separator).frame(height: 1)
+                }
             }
             ShelfHints(coordinator: coordinator)
                 .padding(.top, 8)
@@ -89,28 +91,36 @@ struct CardRow: View {
     let spacing: CGFloat
     let coordinator: PanelCoordinator
     var selectsOnHover = false
-    @State private var hoveredID: String?
+    @State private var hover: CardHover?
+
+    private struct CardHover: Equatable {
+        let id: String
+        let location: CGPoint
+    }
 
     var body: some View {
         HStack(alignment: .top, spacing: spacing) {
             ForEach(cards) { item in
                 ShelfCard(item: item, isSelected: item.id == selectedID, width: cardWidth, clipboard: coordinator.clipboardStore)
                     .onTapGesture { coordinator.shelf.use(item) }
-                    .onHover { inside in
+                    .onContinuousHover { phase in
                         guard selectsOnHover else { return }
-                        if inside { hoveredID = item.id }
-                        else if hoveredID == item.id { hoveredID = nil }
+                        switch phase {
+                        case .active(let location): hover = CardHover(id: item.id, location: location)
+                        case .ended:
+                            if hover?.id == item.id { hover = nil }
+                        }
                     }
             }
             Spacer(minLength: 0)
         }
-        .task(id: hoveredID) {
-            guard let hoveredID else { return }
+        .task(id: hover) {
+            guard let hover else { return }
             try? await Task.sleep(for: HoverDwell.delay)
             guard !Task.isCancelled else { return }
-            coordinator.shelf.selectedID = hoveredID
+            coordinator.shelf.selectedID = hover.id
         }
-        .onChange(of: selectedID) { hoveredID = nil }
+        .onChange(of: selectedID) { hover = nil }
     }
 }
 
