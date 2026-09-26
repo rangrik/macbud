@@ -8,10 +8,7 @@ struct IslandContentView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            NotchBand(state: state)
-                .overlay(alignment: .trailing) {
-                    if coordinator.settings.isEnabled(.keepAwake) { KeepAliveSwitch(coordinator: coordinator).padding(.trailing, 18) }
-                }
+            NotchBand(coordinator: coordinator)
             if !coordinator.hasContent {
                 VStack(spacing: 12) {
                     Text("Choose your features").font(.headline)
@@ -48,7 +45,6 @@ struct KeepAliveSwitch: View {
 
     var body: some View {
         HStack(spacing: 5) {
-            FeatureBadge(kind: .keepAwake, size: 21)
             Text("Keep Alive")
             Toggle("Keep Alive", isOn: Binding(
                 get: { coordinator.keepAwake.isActive },
