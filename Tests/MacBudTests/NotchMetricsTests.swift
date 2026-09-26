@@ -55,7 +55,7 @@ import Testing
         }
     }
 
-    @Test func theFocusedWindowWinsAndThePointerIsTheFallback() {
+    @Test func thePointerWinsAndTheFocusedWindowIsTheFallback() {
         let builtIn = CGRect(x: 0, y: 0, width: 1440, height: 900)
         let external = CGRect(x: 1440, y: 0, width: 2560, height: 1440)
         let frames = [builtIn, external]
@@ -63,17 +63,20 @@ import Testing
         let onBuiltIn = CGRect(x: 100, y: 100, width: 900, height: 700)
         let mouseOnBuiltIn = CGPoint(x: 200, y: 200)
 
-        // A focused window beats the pointer, even when the pointer sits on the other display.
-        #expect(ActiveDisplay.choose(focusedWindow: onExternal, mouse: mouseOnBuiltIn, frames: frames) == 1)
-        #expect(ActiveDisplay.choose(focusedWindow: onBuiltIn, mouse: CGPoint(x: 2000, y: 200), frames: frames) == 0)
-        // A window straddling both displays belongs to whichever shows more of it.
+        // The pointer wins even when the focused window sits on the other display.
+        #expect(ActiveDisplay.choose(focusedWindow: onExternal, mouse: mouseOnBuiltIn, frames: frames) == 0)
+        #expect(ActiveDisplay.choose(focusedWindow: onBuiltIn, mouse: CGPoint(x: 2000, y: 200), frames: frames) == 1)
+        #expect(ActiveDisplay.choose(focusedWindow: onBuiltIn, mouse: CGPoint(x: 2000, y: 1440), frames: frames) == 1)
+        let mouseOffscreen = CGPoint(x: -50, y: -50)
+        #expect(ActiveDisplay.choose(focusedWindow: onExternal, mouse: mouseOffscreen, frames: frames) == 1)
+        // A fallback window straddling both displays belongs to whichever shows more of it.
         #expect(ActiveDisplay.choose(focusedWindow: CGRect(x: 1240, y: 0, width: 600, height: 600),
-                                     mouse: mouseOnBuiltIn, frames: frames) == 1)
+                                     mouse: mouseOffscreen, frames: frames) == 1)
         // No accessibility answer: follow the pointer.
         #expect(ActiveDisplay.choose(focusedWindow: nil, mouse: mouseOnBuiltIn, frames: frames) == 0)
         #expect(ActiveDisplay.choose(focusedWindow: nil, mouse: CGPoint(x: 2000, y: 200), frames: frames) == 1)
         // Offscreen everything: let the caller fall back to the menu-bar screen.
-        #expect(ActiveDisplay.choose(focusedWindow: nil, mouse: CGPoint(x: -50, y: -50), frames: frames) == nil)
+        #expect(ActiveDisplay.choose(focusedWindow: nil, mouse: mouseOffscreen, frames: frames) == nil)
     }
 
     @Test func accessibilityWindowCoordinatesAreFlippedIntoScreenSpace() {
