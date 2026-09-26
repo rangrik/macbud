@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "_for_agents": "You were told your role. 1) Fetch roles.<role>.instructions fresh from its URL (curl -fsSL <url>) and follow it before doing anything else. Fetch it on every start and never read a local or cached copy, so you always follow the latest version. If the fetch fails, tell the user in one line and stop. 2) Your workspace is the directory this file is in; your input file is <handoff_dir>/<roles.<role>.input>; your parent's agent id is in its '## Agents' section. 3) When you spawn a role, use this file: its model (via models.<slug>) or its profile, and the same one-line spawn prompt you received. Never spawn a role on a model other than the one listed here.",
+  "instructions_repo": { "url": "https://github.com/rangrik/Skills", "folder": "instructions", "ref": "main" },
+  "handoff_dir": "workspace_management",
+  "models": {
+    "fable-5.1":   { "provider": "claude", "model": "claude-fable-5-1", "harness": "claude-code" },
+    "gpt-6-astra": { "provider": "codex",  "model": "gpt-6-astra",      "harness": "codex" },
+    "opus-5.5":    { "provider": "claude", "model": "claude-opus-5-5",  "harness": "claude-code" }
+  },
+  "roles": {
+    "manager":     { "model": "fable-5.1",   "profile": null, "instructions": "https://raw.githubusercontent.com/rangrik/Skills/main/instructions/fable-5.1/manager.md" },
+    "wayfinder":   { "model": "fable-5.1",   "profile": null, "instructions": "https://raw.githubusercontent.com/rangrik/Skills/main/instructions/fable-5.1/wayfinder.md",     "input": "brief.md" },
+    "implementor": { "model": "gpt-6-astra", "profile": null, "instructions": "https://raw.githubusercontent.com/rangrik/Skills/main/instructions/gpt-6-astra/implementor.md", "input": "plan.md" },
+    "qa":          { "model": "opus-5.5",    "profile": null, "instructions": "https://raw.githubusercontent.com/rangrik/Skills/main/instructions/opus-5.5/qa.md",            "input": "implementation.md" }
+  }
+}
