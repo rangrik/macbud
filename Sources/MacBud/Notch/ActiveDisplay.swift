@@ -1,7 +1,7 @@
 import AppKit
 import ApplicationServices
 
-/// Follow the pointer, then the focused window, then the menu-bar screen.
+/// Follow the pointer, then the focused window, then NSScreen.main (the key window’s screen).
 enum ActiveDisplay {
     static func screen() -> NSScreen? {
         let index = choose(focusedWindow: focusedWindowFrame(), mouse: NSEvent.mouseLocation,
@@ -31,7 +31,7 @@ enum ActiveDisplay {
               app.processIdentifier != ProcessInfo.processInfo.processIdentifier,
               let primaryHeight = NSScreen.screens.first?.frame.maxY else { return nil }
         let application = AXUIElementCreateApplication(app.processIdentifier)
-        // A hung app must never stall the hot key; fall through to the menu-bar screen.
+        // A hung app must never stall the hot key; fall through to NSScreen.main (the key window’s screen).
         AXUIElementSetMessagingTimeout(application, 0.2)
         guard let window = element(kAXFocusedWindowAttribute, on: application),
               let position = value(kAXPositionAttribute, on: window, type: .cgPoint, as: CGPoint.self),
