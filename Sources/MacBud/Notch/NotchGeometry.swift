@@ -51,7 +51,8 @@ nonisolated extension NSScreen {
 
 nonisolated struct NotchMetrics: Equatable, Sendable {
     var islandSize = CGSize(width: 760, height: 500)
-    var shelfSize = CGSize(width: 620, height: 170)
+    var shelfSize = CGSize(width: 620, height: 400)
+    static func shelfHeight(hasCards: Bool) -> CGFloat { hasCards ? 400 : 170 }
     var toastSize = CGSize(width: 300, height: 76)
     /// Taller toast, for the one that carries a button.
     var actionToastSize = CGSize(width: 430, height: 84)

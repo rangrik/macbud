@@ -1,3 +1,14 @@
+# Latest update — shelf preview pane (2026-09-25, verification pending)
+
+The shelf reuses the island's `ItemPreview` below its unchanged six-card row, between hairlines, with hints at the bottom. `NotchMetrics.shelfHeight(hasCards:)` selects 400 pt for populated opens and 170 pt for empty opens; `PanelCoordinator.openShelf` sets it before opening. Selection changes do not resize the shelf. Deleting the last card leaves the current height until the next open. The island and preview renderers are unchanged.
+
+Gotchas: app previews retain the existing Screen Recording prompt/fallback. The existing clipboard renderer caps displayed text at 20,000 characters. Shared MacBud instances from two other workspaces currently prevent an exclusive runtime pass; the wayfinder has requested the user's runtime decision. No owner's data was touched and no QA prediction sessions or strategies were created.
+
+Verification so far: Debug build and test-bundle build passed; Release build passed without warnings and strict signature verification passed; `git diff --check` passed. **Tests have not run and live UX has not been checked yet.** One new assertion covers populated/empty shelf height. The test-bundle build reports an existing unused-variable warning in `DictationTranscriptEditorTests.swift:53`. An isolated QA home and `.xctestrun` are prepared to keep runtime data out of the owner's profile. This entry must be updated after tests/live QA.
+
+
+---
+
 # Latest update — Keep Alive on both open bands (2026-09-25, 0.8.6)
 
 The shelf and expanded island share the Keep Alive label and switch at the band’s trailing edge, with the existing 18-point inset. `NotchBand` owns the feature-gated overlay; the sun badge and its unused `FeatureArt` case are gone. The MacBud mark, closed band, geometry, tooltip, accessibility identifier, and Keep Alive controller are unchanged.

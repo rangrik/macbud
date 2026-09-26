@@ -1,7 +1,7 @@
 import AppKit
 import SwiftUI
 
-/// The shelf: the clock and logo, the six newest items as cards, and a line of hints.
+/// The shelf: the clock and logo, the six newest items, their preview, and a line of hints.
 struct ShelfView: View {
     let coordinator: PanelCoordinator
 
@@ -23,10 +23,16 @@ struct ShelfView: View {
                         coordinator: coordinator, selectsOnHover: true)
                     .padding(.horizontal, 14)
                     .padding(.top, 6)
+                Rectangle().fill(Theme.separator).frame(height: 1)
+                    .padding(.top, 8)
+                ItemPreview(item: shelf.selected, coordinator: coordinator)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                Rectangle().fill(Theme.separator).frame(height: 1)
             }
             ShelfHints(coordinator: coordinator)
                 .padding(.top, 8)
-            Spacer(minLength: 0)
+                .padding(.bottom, 8)
+            if cards.isEmpty { Spacer(minLength: 0) }
         }
     }
 }
