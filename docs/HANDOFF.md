@@ -1,4 +1,4 @@
-# Latest update — Keep Alive on both open bands (2026-09-25)
+# Latest update — Keep Alive on both open bands (2026-09-25, 0.8.6)
 
 The shelf and expanded island share the Keep Alive label and switch at the band’s trailing edge, with the existing 18-point inset. `NotchBand` owns the feature-gated overlay; the sun badge and its unused `FeatureArt` case are gone. The MacBud mark, closed band, geometry, tooltip, accessibility identifier, and Keep Alive controller are unchanged.
 
