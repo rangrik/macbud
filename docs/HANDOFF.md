@@ -1,4 +1,4 @@
-# Latest update — pointer-first shelf screen (2026-09-25)
+# Latest update — pointer-first shelf screen (2026-09-25, 0.8.5)
 
 The shelf now opens on the screen under the pointer, including its top row. `ActiveDisplay.choose` uses `NSMouseInRect` to include that row and only reads the focused window when the pointer misses every display, avoiding the accessibility lookup’s possible 200 ms timeout. The focused window then wins by largest overlap; the caller’s last resort is `NSScreen.main` (the key window’s screen), then the first display. Dictation uses the same priority when retargeting an open shelf; notch-tab clicks still target their own screen.
 
