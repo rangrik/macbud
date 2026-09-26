@@ -95,6 +95,59 @@ nonisolated enum PredictionPrompts {
         """
     }
 
+    /// Jev takes a block of state and typed questions, not a prompt. Ages become words because it reads numbers as text.
+    static func jev(context: PredictionContext, strategies: String, recent: [SessionRecord], model: String) -> String {
+        func age(_ s: Int?) -> String {
+            guard let s else { return "never" }
+            return switch s {
+            case ..<15: "seconds ago"
+            case ..<60: "under a minute ago"
+            case ..<300: "1 to 5 minutes ago"
+            case ..<1800: "5 to 30 minutes ago"
+            case ..<7200: "30 minutes to 2 hours ago"
+            case ..<28_800: "2 to 8 hours ago"
+            default: "more than 8 hours ago"
+            }
+        }
+        func short(_ bundle: String?) -> String { bundle?.split(separator: ".").last.map(String.init) ?? "unknown" }
+        func open(_ s: SessionRecord) -> String {
+            let c = s.context
+            let used = s.outcome.map { $0.kind.rawValue + ($0.newest.map { $0 ? " (newest)" : " (older)" } ?? "") + ($0.app.map { " " + short($0) } ?? "") }
+            return "\(s.t.formatted(.dateTime.weekday(.abbreviated).hour(.twoDigits(amPM: .omitted)).minute())) · front app \(short(c.app))"
+                + " · latest copy \(c.clipboardKind ?? "none") \(age(c.clipboardAge)) · screenshot \(age(c.screenshotAge))"
+                + " · dictation \(age(c.dictationAge)) → used \(used ?? "nothing")"
+        }
+        let hour = context.hour
+        var state: [String: Any] = [
+            "now": ["weekday": context.weekday, "hour": String(format: "%02d:00", hour),
+                    "part_of_day": hour < 6 ? "night" : hour < 12 ? "morning" : hour < 18 ? "afternoon" : "evening"],
+            "front_app": ["bundle_id": context.app ?? "unknown", "name": short(context.app)],
+            "latest_clipboard_item": ["kind": context.clipboardKind ?? "none", "copied_from": short(context.clipboardSource),
+                                      "copied": age(context.clipboardAge)],
+            "latest_screenshot": ["kind": context.screenshotKind ?? "none", "saved": age(context.screenshotAge)],
+            "latest_dictation": ["finished": age(context.dictationAge)],
+            "recent_opens_oldest_first": recent.isEmpty ? ["none yet"] : recent.map(open),
+        ]
+        if let previous = context.previousApp { state["previous_app"] = short(previous) }
+        if let running = context.runningApps { state["running_apps"] = running.map { short($0) } }
+        if !strategies.isEmpty { state["rules_written_by_a_reviewer_from_past_misses"] = strategies }
+        let questions: [String: Any] = [
+            "kind": ["type": "choice",
+                     "instructions": "The owner of a Mac utility just pressed its open key. Which kind of item are they most likely "
+                         + "reaching for right now? Weigh `front_app`, how recently each item arrived, and `recent_opens_oldest_first`.",
+                     "criteria": Dictionary(uniqueKeysWithValues: context.kinds.map { ($0.rawValue, meanings[$0] ?? "") })],
+            "which_item": ["type": "choice",
+                           "instructions": "Within the kind they are reaching for, do they want the most recent item of that kind, "
+                               + "or an earlier one they will search for?",
+                           "criteria": ["newest": "the most recent item of that kind (for an app: the window they just left)",
+                                        "older": "an earlier item of that kind that they will look for",
+                                        "either": "nothing here says which; they will pick either way"]],
+        ]
+        let body: [String: Any] = ["model": model, "state": state, "questions": questions]
+        let data = (try? JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])) ?? Data()
+        return String(decoding: data, as: UTF8.self)
+    }
+
     static func driverSchema(_ kinds: [IntentKind]) -> String {
         schema(["kind": ["type": "string", "enum": kinds.map(\.rawValue)], "app": ["type": "string"],
                 "hint": ["type": "string", "enum": ItemHint.allCases.map(\.rawValue)],
