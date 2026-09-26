@@ -45,6 +45,11 @@ struct PredictionSettings: View {
                     Text("On the opens the model answered, the rules would have hit \(rates.heuristicWhereModel.text).")
                         .font(.caption).foregroundStyle(.secondary)
                 }
+                if predictor.shadowReady {
+                    LabeledContent("Jev in the shadow, last 7 days", value: rates.shadow.text)
+                    Text("Jev (\(SectionPredictor.shadowModel)) is asked the same questions but never picks the landing. On the opens it answered, the landing hit \(rates.landedWhereShadow.text).")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
                 LabeledContent("Misses waiting for review", value: "\(predictor.unreviewedMisses.count)")
                 let usage = PredictionActivity.usageToday(predictor.calls)
                 if usage.isEmpty { LabeledContent("Today", value: "No calls") }

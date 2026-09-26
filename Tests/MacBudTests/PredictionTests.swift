@@ -32,6 +32,38 @@ import Testing
             #expect(prompt.contains(#""previousApp":"com.google.Chrome""#) && prompt.contains("app com.apple.Preview"))
             #expect(!prompt.contains("dictationHistory") && !prompt.contains("section"), "Prompts must not name today's tabs")
         }
+        let jev = PredictionPrompts.jev(context: context, strategies: "", recent: [miss, switched], model: "jev-latest")
+        for secret in ["hunter2", "Private", "Plan.pdf", "secret", "4321", "Layoffs"] { #expect(!jev.contains(secret)) }
+        #expect(jev.contains("slackmacgap") && jev.contains("Preview") && jev.contains("seconds ago"))
+    }
+
+    /// Seam: Jev's answers → the driver's reply shape → a scored shadow on the open.
+    /// Catches a shadow that lands, goes unscored, flips the status, or eats the daily cap.
+    @Test func shadowIsScoredButNeverLands() async throws {
+        let answers = #"""
+        {"model":"jev-1.13.0","answers":{"kind":{"type":"choice","choice":"snippet","probabilities":{"snippet":0.7,"text":0.3},"confidence":0.55},
+        "which_item":{"type":"choice","choice":"either","probabilities":{"either":0.8,"newest":0.1,"older":0.1},"confidence":0.7}},
+        "usage":{"input_tokens":900,"output_tokens":20}}
+        """#
+        let reply = try JevRunner.normalize(Data(answers.utf8))
+        let parsed = try #require(DriverReply.parse(reply.text, kinds: IntentKind.allCases))
+        #expect(parsed.kind == .snippet && parsed.hint == .any && parsed.confidence == 0.55 && reply.tokens.input == 900)
+        let context = context()
+        let driver = FakeRunner(["driver": .success(#"{"kind":"text","hint":"any","confidence":0.5,"note":"n"}"#)])
+        let (predictor, _) = makePredictor(driver, context, shadow: FakeRunner(["shadow": .failure(ModelError(message: "HTTP 529"))]))
+        await predictor.refresh(context)
+        await predictor.shadowRefresh(context)
+        #expect(predictor.status == .ready && predictor.calls.last?.status == "failed")
+        let (scored, _) = makePredictor(driver, context, shadow: FakeRunner(["shadow": .success(reply.text)]))
+        await scored.refresh(context)
+        await scored.shadowRefresh(context)
+        #expect(scored.intentForOpen { _ in "shelf" }?.kind == .text)
+        scored.noteAction("copy", outcome: Outcome(kind: .snippet), in: "snippets")
+        scored.sessionEnded()
+        let session = try #require(scored.sessions.last)
+        #expect(session.hit == false && session.shadowHit == true && session.shadow?.intent.kind == .snippet)
+        #expect(scored.rates.shadow.hits == 1 && scored.rates.landedWhereShadow.total == 1 && scored.rates.landedWhereShadow.hits == 0)
+        #expect(scored.callsToday == 1, "shadow calls stay outside the cap")
     }
 
     /// Seam: runner failure → open path. Catches a broken CLI leaving the open without the rules' pick.
@@ -154,9 +186,9 @@ import Testing
 
     private func makePredictor(_ runner: FakeRunner, _ context: PredictionContext,
                                _ memory: DataStore = DataStore(directory: FileManager.default.temporaryDirectory
-                                   .appendingPathComponent(UUID().uuidString))) -> (SectionPredictor, AppSettings) {
+                                   .appendingPathComponent(UUID().uuidString)), shadow: FakeRunner? = nil) -> (SectionPredictor, AppSettings) {
         let settings = AppSettings(defaults: UserDefaults(suiteName: UUID().uuidString)!)
-        return (SectionPredictor(settings: settings, memory: memory, runner: runner) { context }, settings)
+        return (SectionPredictor(settings: settings, memory: memory, runner: runner, shadow: shadow) { context }, settings)
     }
 }
 

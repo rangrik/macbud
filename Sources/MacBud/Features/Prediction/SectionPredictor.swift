@@ -12,6 +12,9 @@ final class SectionPredictor {
     }
 
     let runner: any ModelRunner
+    /// A second model asked the same questions and scored on the same opens, without a say in the landing.
+    let shadow: (any ModelRunner)?
+    static let shadowModel = "jev-latest"
     let memory: DataStore
     private let settings: AppSettings
     private let capture: () -> PredictionContext
@@ -23,8 +26,12 @@ final class SectionPredictor {
     private(set) var isBusy = false
     private(set) var codexPath: String?
     private(set) var thread: DriverThread?
+    private(set) var shadowReady = false
     @ObservationIgnored private var events: [EventRecord] = []
     @ObservationIgnored private var cache: [String: ModelPick] = [:]
+    @ObservationIgnored private var shadowCache: [String: ModelPick] = [:]
+    @ObservationIgnored private var shadowBusy = false
+    @ObservationIgnored private var nextShadow = Date.distantPast
     @ObservationIgnored private var open: SessionRecord?
     @ObservationIgnored private var lastKey = ""
     @ObservationIgnored private var lastAges: [Int?] = []
@@ -32,10 +39,12 @@ final class SectionPredictor {
     @ObservationIgnored private var nextReview = Date.distantPast
     @ObservationIgnored private var timer: Timer?
 
-    init(settings: AppSettings, memory: DataStore, runner: any ModelRunner, capture: @escaping () -> PredictionContext) {
+    init(settings: AppSettings, memory: DataStore, runner: any ModelRunner, shadow: (any ModelRunner)? = nil,
+         capture: @escaping () -> PredictionContext) {
         self.settings = settings
         self.memory = memory
         self.runner = runner
+        self.shadow = shadow
         self.capture = capture
     }
 
@@ -49,6 +58,7 @@ final class SectionPredictor {
         lastReview = saved?.modified
         codexPath = await runner.codexPath()
         if codexPath == nil { status = .missingCLI }
+        shadowReady = await shadow?.codexPath() != nil
         let timer = Timer(timeInterval: 5, repeats: true) { [weak self] _ in MainActor.assumeIsolated { self?.tick() } }
         timer.tolerance = 1
         RunLoop.main.add(timer, forMode: .common)
@@ -74,6 +84,7 @@ final class SectionPredictor {
             return
         }
         if fresh(cache[context.key]) == nil { Task { await refresh(context) } }
+        if shadowReady, fresh(shadowCache[context.key]) == nil { Task { await shadowRefresh(context) } }
         reviewIfDue()
     }
 
@@ -94,7 +105,7 @@ final class SectionPredictor {
         let source = model == nil ? "heuristic" : "model"
         let place = opened(landed)
         open = SessionRecord(t: .now, context: context, heuristic: context.heuristic, model: model, landed: landed, source: source,
-                             opened: place)
+                             opened: place, shadow: fresh(shadowCache[context.key]).flatMap { context.kinds.contains($0.intent.kind) ? $0 : nil })
         Trace.log("predict open=\(place) intent=\(PredictionPrompts.describe(landed)) source=\(source) took=\(ContinuousClock.now - started)")
         return landed
     }
@@ -112,6 +123,7 @@ final class SectionPredictor {
         guard var record = open else { return }
         open = nil
         record.hit = record.outcome.map(record.landed.matches)
+        record.shadowHit = record.outcome.flatMap { outcome in record.shadow.map { $0.intent.matches(outcome) } }
         sessions.append(record)
         if sessions.count > 500 { sessions.removeFirst(sessions.count - 500) }
         Task { await memory.appendLine(record, to: "predictions.jsonl") }
@@ -134,7 +146,7 @@ final class SectionPredictor {
         } ?? PredictionPrompts.driver(context: context, strategies: strategies, recent: Array(sessions.filter { $0.hit != nil }.suffix(15)))
         let reply = await call(ModelCall(purpose: "driver", model: config.driverModel, effort: config.driverEffort, prompt: prompt,
                                          schema: PredictionPrompts.driverSchema(context.kinds), timeout: .seconds(30),
-                                         keepThread: true, thread: resume?.id)) {
+                                         keepThread: true, thread: resume?.id), on: runner) {
             DriverReply.parse($0, kinds: context.kinds)
         }
         // A lost thread is not an outage: start a new one on the next call.
@@ -145,6 +157,20 @@ final class SectionPredictor {
         cache[context.key] = ModelPick(intent: LandingIntent(kind: reply.kind, hint: reply.hint, confidence: min(max(reply.confidence, 0), 1), app: app),
                                        note: String(reply.note.prefix(300)), key: context.key, madeAt: .now)
         if cache.count > 20, let oldest = cache.min(by: { $0.value.madeAt < $1.value.madeAt })?.key { cache[oldest] = nil }
+    }
+
+    func shadowRefresh(_ context: PredictionContext) async {
+        guard let shadow, settings.prediction.useModel, !shadowBusy, Date.now >= nextShadow else { return }
+        shadowBusy = true
+        defer { shadowBusy = false }
+        let prompt = PredictionPrompts.jev(context: context, strategies: strategies, recent: Array(sessions.filter { $0.hit != nil }.suffix(15)),
+                                           model: Self.shadowModel)
+        let reply = await call(ModelCall(purpose: "shadow", model: Self.shadowModel, effort: "-", prompt: prompt, schema: "",
+                                         timeout: .seconds(10)), on: shadow) { DriverReply.parse($0, kinds: context.kinds) }
+        guard let reply else { nextShadow = .now + 300; return }
+        shadowCache[context.key] = ModelPick(intent: LandingIntent(kind: reply.kind, hint: reply.hint, confidence: min(max(reply.confidence, 0), 1)),
+                                             note: String(reply.note.prefix(300)), key: context.key, madeAt: .now)
+        if shadowCache.count > 20, let oldest = shadowCache.min(by: { $0.value.madeAt < $1.value.madeAt })?.key { shadowCache[oldest] = nil }
     }
 
     var unreviewedMisses: [SessionRecord] { sessions.filter { $0.hit == false && $0.t > (lastReview ?? .distantPast) } }
@@ -166,7 +192,7 @@ final class SectionPredictor {
                                                 rates: "model \(rates.model.text); heuristic \(rates.heuristic.text)")
         let reply = await call(ModelCall(purpose: "reviewer", model: config.reviewerModel, effort: config.reviewerEffort,
                                          prompt: prompt, schema: PredictionPrompts.reviewerSchema, timeout: .seconds(120)),
-                               parse: ReviewerReply.parse)
+                               on: runner, parse: ReviewerReply.parse)
         guard let reply else { nextReview = .now + 1800; return }
         strategies = reply.strategies
         lastReview = .now
@@ -186,7 +212,7 @@ final class SectionPredictor {
     }
 
     /// Every call lands in the ledger, whatever happens, so the owner can read what was sent and received.
-    private func call<T>(_ call: ModelCall, parse: (String) -> T?) async -> T? {
+    private func call<T>(_ call: ModelCall, on runner: any ModelRunner, parse: (String) -> T?) async -> T? {
         let started = Date.now
         var record = CallRecord(t: started, purpose: call.purpose, model: call.model, effort: call.effort, prompt: call.prompt)
         var result: T?
@@ -216,31 +242,37 @@ final class SectionPredictor {
         calls.append(record)
         if calls.count > 300 { calls.removeFirst(calls.count - 300) }
         await memory.appendLine(record, to: "calls.jsonl")
-        status = record.error.map { .failed($0) } ?? .ready
+        if call.purpose != "shadow" { status = record.error.map { .failed($0) } ?? .ready }
         Trace.log("predict call \(call.purpose) \(record.status) \(record.ms)ms input=\(record.tokens?.input ?? 0) cached=\(record.tokens?.cached ?? 0) thread=\(record.thread ?? "-") turn=\(record.turn ?? 0)")
         return result
     }
 
     // MARK: What Settings and automation show
 
-    var callsToday: Int { calls.filter { Calendar.current.isDateInToday($0.t) }.count }
+    /// Shadow calls cost a fraction of a cent and stay outside the cap.
+    var callsToday: Int { calls.filter { Calendar.current.isDateInToday($0.t) && $0.purpose != "shadow" }.count }
 
     /// Last 7 days. `heuristicWhereModel` scores the heuristic on the same opens the model answered.
-    var rates: (model: Rate, heuristic: Rate, heuristicWhereModel: Rate) {
-        var model = Rate(), heuristic = Rate(), same = Rate()
+    var rates: (model: Rate, heuristic: Rate, heuristicWhereModel: Rate, shadow: Rate, landedWhereShadow: Rate) {
+        var model = Rate(), heuristic = Rate(), same = Rate(), shadow = Rate(), landed = Rate()
         for s in sessions where s.t > .now - 7 * 86_400 {
             guard let outcome = s.outcome else { continue }
+            if let pick = s.shadow?.intent {
+                shadow.total += 1; shadow.hits += pick.matches(outcome) ? 1 : 0
+                landed.total += 1; landed.hits += s.landed.matches(outcome) ? 1 : 0
+            }
             let heuristicHit = s.heuristic?.matches(outcome) == true ? 1 : 0
             heuristic.total += 1; heuristic.hits += heuristicHit
             guard let pick = s.model?.intent else { continue }
             model.total += 1; model.hits += pick.matches(outcome) ? 1 : 0
             same.total += 1; same.hits += heuristicHit
         }
-        return (model, heuristic, same)
+        return (model, heuristic, same, shadow, landed)
     }
 
     func resetMemory() async {
         cache = [:]
+        shadowCache = [:]
         sessions = []
         strategies = ""
         lastReview = nil
@@ -255,7 +287,8 @@ final class SectionPredictor {
         return ["status": String(describing: status), "busy": isBusy, "cached": cache.count, "key": capture().key,
                 "sessions": sessions.count, "unreviewedMisses": unreviewedMisses.count, "callsToday": callsToday,
                 "strategyLines": strategies.split(separator: "\n").count, "lastReview": lastReview?.ISO8601Format() ?? "",
-                "thread": thread?.id ?? "", "threadTurns": thread?.turns ?? 0, "threadSize": thread?.size ?? 0, "last": last ?? [:]]
+                "thread": thread?.id ?? "", "threadTurns": thread?.turns ?? 0, "threadSize": thread?.size ?? 0,
+                "shadowReady": shadowReady, "shadowCached": shadowCache.count, "last": last ?? [:]]
     }
 }
 

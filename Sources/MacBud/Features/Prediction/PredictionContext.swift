@@ -73,6 +73,9 @@ nonisolated struct SessionRecord: Codable, Identifiable, Sendable {
     var outcome: Outcome?
     var action: String?
     var secs: Double?
+    /// Jev's pick for the same moment, scored but never landed on.
+    var shadow: ModelPick?
+    var shadowHit: Bool?
     /// Nil when the owner used nothing, so there is nothing to score.
     var hit: Bool?
     var id: Date { t }

@@ -74,6 +74,7 @@ nonisolated enum PredictionActivity {
             let kind: ActivityEntry.Kind = c.status != "ok" ? .error : c.purpose == "reviewer" ? .reviewer : .driver
             entries.append(ActivityEntry(id: Self.id(of: c), t: c.t, kind: kind, summary: callSummary(c), call: c,
                                          linkedOpens: opensByCall[c.t] ?? []))
+            guard c.purpose != "shadow" else { continue }
             let day = Calendar.current.startOfDay(for: c.t)
             perDay[day, default: 0] += 1
             if perDay[day] == cap {
@@ -106,6 +107,10 @@ nonisolated enum PredictionActivity {
                 Rules said \(s.heuristic.map(describe) ?? "nothing"). Model said \(s.model.map { describe($0.intent) + String(format: ", %.2f", $0.intent.confidence) } ?? "nothing").
                 """))
             if let note = s.model?.note { out.append(ActivityDetail(title: "Driver's note", text: note)) }
+            if let shadow = s.shadow {
+                out.append(ActivityDetail(title: "Jev, in the shadow", text: describe(shadow.intent) + String(format: ", %.2f", shadow.intent.confidence)
+                                          + (s.shadowHit.map { $0 ? " · would have hit" : " · would have missed" } ?? "") + "\n" + shadow.note))
+            }
             out.append(ActivityDetail(title: "Context at open", text: pretty(try? JSONEncoder().encode(s.context)), isCode: true))
             if let c = entry.linkedCall {
                 out.append(ActivityDetail(title: "Driver call behind the pick", text: "\(c.t.formatted(date: .abbreviated, time: .standard)) · \(callSummary(c))",
