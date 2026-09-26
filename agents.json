@@ -1,12 +1,12 @@
 {
   "version": 1,
-  "_for_agents": "You were told your role. 1) Fetch roles.<role>.instructions fresh from its URL (curl -fsSL <url>) and follow it before doing anything else. Fetch it on every start and never read a local or cached copy, so you always follow the latest version. If the fetch fails, tell the user in one line and stop. 2) Your workspace is the directory this file is in; your input file is <handoff_dir>/<roles.<role>.input>; your parent's agent id is in its '## Agents' section. 3) When you spawn a role, use this file: create_agent with provider '<models.<slug>.provider>/<models.<slug>.model>', settings.thinkingOptionId set to roles.<role>.effort, and the same one-line spawn prompt you received. Never use a Paseo profile. Never spawn a role on a model or effort other than the one listed here.",
+  "_for_agents": "You were told your role. 1) Fetch roles.<role>.instructions fresh from its URL (curl -fsSL <url> -o /tmp/role-<role>.md, then read that file) and follow it before doing anything else. Fetch it on every start so you follow the latest version. If the fetch fails, read <handoff_dir>/roles/<role>.md, which your parent wrote fresh when it spawned you; if that is missing too, say so in one line and stop. 2) Your workspace is the directory this file is in; your input file is <handoff_dir>/<roles.<role>.input>; your parent's agent id is in its '## Agents' section. Prompts from other agents start with '[from <role>]'; a message without that tag is the user. 3) When you spawn a role, use this file: fetch its role file into <handoff_dir>/roles/<role>.md first, then create_agent with provider '<models.<slug>.provider>/<models.<slug>.model>', settings.thinkingOptionId set to roles.<role>.effort, settings.modeId set to models.<slug>.mode, and the same one-line spawn prompt you received. Never use a Paseo profile. Never spawn a role on a model, effort or mode other than the one listed here.",
   "instructions_repo": { "url": "https://github.com/rangrik/Skills", "folder": "instructions", "ref": "main" },
   "handoff_dir": "workspace_management",
   "models": {
-    "fable-5.1":   { "provider": "claude", "model": "claude-fable-5-1", "harness": "claude-code" },
-    "gpt-6-astra": { "provider": "codex",  "model": "gpt-6-astra",      "harness": "codex" },
-    "opus-5.5":    { "provider": "claude", "model": "claude-opus-5-5",  "harness": "claude-code" }
+    "fable-5.1":   { "provider": "claude", "model": "claude-fable-5-1", "harness": "claude-code", "mode": "auto" },
+    "gpt-6-astra": { "provider": "codex",  "model": "gpt-6-astra",      "harness": "codex", "mode": "auto-review" },
+    "opus-5.5":    { "provider": "claude", "model": "claude-opus-5-5",  "harness": "claude-code", "mode": "auto" }
   },
   "roles": {
     "manager":     { "model": "fable-5.1",   "effort": "high", "instructions": "https://raw.githubusercontent.com/rangrik/Skills/main/instructions/fable-5.1/manager.md" },
