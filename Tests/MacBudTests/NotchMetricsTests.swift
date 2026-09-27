@@ -27,6 +27,10 @@ import Testing
             #expect(!KeyBindings.defaults.chords(for: command).isEmpty, "\(command) has no default chord")
         }
     }
+
+    @Test func shelfHeightDependsOnWhetherThereAreCards() {
+        #expect([true, false].map { NotchMetrics.shelfHeight(hasCards: $0) } == [400, 170])
+    }
 }
 
 @Suite @MainActor struct MultiDisplayNotchTests {

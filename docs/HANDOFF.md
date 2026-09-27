@@ -1,3 +1,26 @@
+# Latest update — shelf preview pane (2026-09-26, 0.8.7)
+
+The shelf reuses the island's `ItemPreview` below its unchanged six-card row, between hairlines, with hints at the bottom. `NotchMetrics.shelfHeight(hasCards:)` selects 400 pt for populated opens and 170 pt for empty opens; `PanelCoordinator.openShelf` sets it before opening. A card is selected after the pointer stays still over it for the existing 150 ms `HoverDwell.delay`. Every location change restarts that wait; leaving the card or changing selection cancels it. Arrows and clicks remain immediate. The island and preview renderers are unchanged.
+
+The pane and its hairlines appear only when cards exist and the shelf opened tall. The height stays fixed until close: deleting the last card shows the empty line in the tall shelf; the first card arriving on a short shelf appears between the band and hints without a pane. The next open chooses its height from the cards then present.
+
+Gotchas: the existing Screen Recording prompt can close the shelf on its first app-preview open; reopening showed the predicted TextEdit window. Disabling Screenshots exposed a pre-existing Swift executor assertion in `FolderWatcher`'s cancellation callback; empty sizing was checked from a cold launch and by clearing disposable history. That crash remains a separate follow-up. Existing clipboard text rendering is capped at 20,000 characters.
+
+Verification: **137 tests in 25 suites passed** in the unfiltered xcodebuild run, with no `Failing tests:` line. Release built without compiler warnings and strict signature verification passed. Live Debug checks through `mbctl` and actual AppKit captures saw text through its final line, monospace code, link host/URL, image and screenshot sizing/metadata, file icon/path, dictation bars/text, and a real model-predicted TextEdit window. Arrows swapped previews at 400 pt; a hover-opened shelf stayed non-key and closed on pointer exit. Return and card clicks copied; Command-Return pasted the full 32-line fixture into disposable TextEdit; Down/typing expanded, Escape closed, Pin updated metadata, and Save as Snippet opened the exact text as a draft, then was cancelled. Prediction actions recorded `actedIn: shelf`.
+
+Independent QA rounds 1 and 2 passed the criteria then specified (11 and 13 respectively) and prompted the stillness and first-card layout changes. Revision 3 live checks moved the pointer from the band straight down over card 3 into the pane over one second, also crossing fast and diagonally: card 1 remained selected at every sample and in the captured preview. Parking on card 3 for 70 ms kept card 1; 500 ms selected card 3. An arrow immediately changed selection and cancelled a pending hover; pointer exit closed the shelf. With no cards, a non-key shelf opened at 170 pt; a real pasteboard copy arrived through the clipboard monitor, and the band, new card and hints stayed visible without a pane. Reopening produced a 400 pt shelf with the preview, and the primary action copied the exact text.
+
+QA round 3 passed **14 criteria, 0 failures**, reviewing revision 3. Slow crossings up to four seconds, fast and diagonal crossings, real hover scrolling, both clipboard and screenshot arrival on a short shelf, copy/paste, and every preview kind passed. The never-granted Screen Recording prompt and denied fallback remain unverified, accepted by the user in Q7; the actual window preview and icon fallback were seen.
+
+Follow-ups from round 3: on a focused shelf, after arrowing away from the card under the pointer, a 1 pt nudge within that card re-picks it after the stillness delay (minor; accepted for this release). Separately, opening with the pointer already over the card row selects that card instead of the predicted card without further movement; this also happens on main and can skew prediction hits. Both are deferred, not changed here.
+
+Timing: **25.53 ms before, 27.46 ms with the preview** (20 opens each, same signed Debug identity, synthetic data, settings, and 0.4 s open/close pacing). The 1.93 ms increase passes the wayfinder's clarified criterion of within 5 ms of a matching baseline; the original 15 ms absolute figure was stale. Independent QA also met the comparison criterion.
+
+QA used an isolated data home and preferences. Temporary capture/input probes and preferences injection were removed before the final build/test/Release run. Synthetic prediction sessions, the temporary one-call strategy and app copy were removed. The dedicated preferences domain and its plist were both deleted. No owner MacBud data was edited. The revision-3 live probe restored the pasteboard and pointer. Independent QA exercised scroll-wheel input; the implementor exercised the actual preview scroll view directly. The branch retains main's Keep Alive and pointer-first HANDOFF entries below. Leave this workspace/worktree in place after delivery, per the user's addendum.
+
+
+---
+
 # Latest update — Keep Alive on both open bands (2026-09-25, 0.8.6)
 
 The shelf and expanded island share the Keep Alive label and switch at the band’s trailing edge, with the existing 18-point inset. `NotchBand` owns the feature-gated overlay; the sun badge and its unused `FeatureArt` case are gone. The MacBud mark, closed band, geometry, tooltip, accessibility identifier, and Keep Alive controller are unchanged.

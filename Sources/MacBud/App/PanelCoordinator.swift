@@ -138,6 +138,7 @@ final class PanelCoordinator {
         var landed = landing(nil)
         if settings.prediction.enabled { _ = predictor.intentForOpen { landed = landing($0); return landed.place } }
         state.chip = landed.chip
+        state.metrics.shelfSize.height = NotchMetrics.shelfHeight(hasCards: !shelf.recents.isEmpty)
         notch.open(landed.expanded ? .expanded : .shelf, focus: focus, on: screen)
         shelf.select(landed.card)
         if state.chip == .apps { apps.didShow() }
