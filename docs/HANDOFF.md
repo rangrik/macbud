@@ -1,4 +1,4 @@
-# Latest update — shelf preview pane (2026-09-26)
+# Latest update — shelf preview pane (2026-09-26, 0.8.7)
 
 The shelf reuses the island's `ItemPreview` below its unchanged six-card row, between hairlines, with hints at the bottom. `NotchMetrics.shelfHeight(hasCards:)` selects 400 pt for populated opens and 170 pt for empty opens; `PanelCoordinator.openShelf` sets it before opening. A card is selected after the pointer stays still over it for the existing 150 ms `HoverDwell.delay`. Every location change restarts that wait; leaving the card or changing selection cancels it. Arrows and clicks remain immediate. The island and preview renderers are unchanged.
 
