@@ -83,6 +83,24 @@ import Testing
         #expect(scored.callsToday == 1, "shadow calls stay outside the cap")
     }
 
+    /// Seam: Jev's `which_app` answer → the cached pick's app. Catches the question missing the running apps, a confident
+    /// running app lost, and a low-confidence, `none` or not-running answer naming an app.
+    @Test func jevNamesAnAppOnlyWhenConfidentAndRunning() async throws {
+        let running = ["com.tinyspeck.slackmacgap", "com.apple.Safari"]
+        let context = PredictionContext(hour: 10, weekday: "Thu", app: "com.apple.Safari", previousApp: running[0], runningApps: running,
+                                        kinds: IntentKind.allCases)
+        let body = PredictionPrompts.jev(context: context, strategies: "", recent: [], model: "jev-latest")
+        #expect(body.contains(#""which_app""#) && body.contains(#""com.tinyspeck.slackmacgap":"slackmacgap, running now""#))
+        let cases: [(String, Double, String?)] = [(running[0], 0.7, running[0]), (running[0], 0.4, nil), ("none", 0.9, nil), ("com.not.Running", 0.9, nil)]
+        for (app, confidence, expected) in cases {
+            let answers = #"{"answers":{"kind":{"choice":"app","confidence":0.8},"which_item":{"choice":"newest","confidence":0.9},"#
+                + #""which_app":{"choice":"\#(app)","confidence":\#(confidence)}}}"#
+            let (predictor, _) = makePredictor(FakeRunner(["driver": .success(try JevRunner.normalize(Data(answers.utf8)).text)]), context)
+            await predictor.refresh(context)
+            #expect(predictor.intentForOpen(context) { _ in "shelf" }?.app == expected)
+        }
+    }
+
     /// Seam: an Accessibility read → the recorded event. Catches reading while locked, idle or untrusted,
     /// a secure field's window being read, and file paths or query strings kept as web addresses.
     @Test func activityRecordsOnlyWhatIsAllowed() {

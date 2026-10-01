@@ -242,8 +242,9 @@ final class SectionPredictor {
         if open?.context.key == context.key, open?.shadow == nil { open?.shadow = shadowCache[context.key] }
     }
 
+    /// An app counts only when it is one of the running apps the models were shown.
     private func pick(_ reply: DriverReply, _ context: PredictionContext, model: String) -> ModelPick {
-        let app = reply.kind == .app && reply.app?.isEmpty == false ? reply.app : nil
+        let app = reply.kind == .app ? reply.app.flatMap { context.runningApps?.contains($0) == true ? $0 : nil } : nil
         return ModelPick(intent: LandingIntent(kind: reply.kind, hint: reply.hint, confidence: min(max(reply.confidence, 0), 1), app: app),
                          note: String(reply.note.prefix(300)), key: context.key, madeAt: .now, model: model)
     }

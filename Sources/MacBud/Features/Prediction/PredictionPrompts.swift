@@ -133,7 +133,7 @@ nonisolated enum PredictionPrompts {
         if let previous = context.previousApp { state["previous_app"] = short(previous) }
         if let running = context.runningApps { state["running_apps"] = running.map { short($0) } }
         if !strategies.isEmpty { state["rules_written_by_a_reviewer_from_past_misses"] = strategies }
-        let questions: [String: Any] = [
+        var questions: [String: Any] = [
             "kind": ["type": "choice",
                      "instructions": "The owner of a Mac utility just pressed its open key. Which kind of item are they most likely "
                          + "reaching for right now? Weigh `front_app`, `recent_activity`, how recently each item arrived, and `recent_opens_oldest_first`.",
@@ -145,6 +145,12 @@ nonisolated enum PredictionPrompts {
                                         "older": "an earlier item of that kind that they will look for",
                                         "either": "nothing here says which; they will pick either way"]],
         ]
+        if let running = context.runningApps, !running.isEmpty {
+            questions["which_app"] = ["type": "choice",
+                                      "instructions": "If they are reaching for an app, which running app? `none` unless something here points to one.",
+                                      "criteria": Dictionary(uniqueKeysWithValues: running.prefix(8).map { ($0, short($0) + ", running now") })
+                                          .merging(["none": "no app in particular"]) { a, _ in a }]
+        }
         let body: [String: Any] = ["model": model, "state": state, "questions": questions]
         let data = (try? JSONSerialization.data(withJSONObject: body, options: [.sortedKeys, .withoutEscapingSlashes])) ?? Data()
         return String(decoding: data, as: UTF8.self)
