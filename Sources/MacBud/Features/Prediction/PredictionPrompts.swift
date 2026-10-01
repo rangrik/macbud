@@ -1,6 +1,6 @@
 import Foundation
 
-/// Builds what the models read. Only `PredictionContext` metadata and our own records go in, and no tab names.
+/// Builds what the models read. Only `PredictionContext` and our own records go in, and no tab names.
 nonisolated enum PredictionPrompts {
     static let instructions = "Reply with JSON only, matching the schema. You have no tools.\n"
 
@@ -129,13 +129,14 @@ nonisolated enum PredictionPrompts {
             "latest_dictation": ["finished": age(context.dictationAge)],
             "recent_opens_oldest_first": recent.isEmpty ? ["none yet"] : recent.map(open),
         ]
+        if let activity = context.activity { state["recent_activity"] = activity }
         if let previous = context.previousApp { state["previous_app"] = short(previous) }
         if let running = context.runningApps { state["running_apps"] = running.map { short($0) } }
         if !strategies.isEmpty { state["rules_written_by_a_reviewer_from_past_misses"] = strategies }
         let questions: [String: Any] = [
             "kind": ["type": "choice",
                      "instructions": "The owner of a Mac utility just pressed its open key. Which kind of item are they most likely "
-                         + "reaching for right now? Weigh `front_app`, how recently each item arrived, and `recent_opens_oldest_first`.",
+                         + "reaching for right now? Weigh `front_app`, `recent_activity`, how recently each item arrived, and `recent_opens_oldest_first`.",
                      "criteria": Dictionary(uniqueKeysWithValues: context.kinds.map { ($0.rawValue, meanings[$0] ?? "") })],
             "which_item": ["type": "choice",
                            "instructions": "Within the kind they are reaching for, do they want the most recent item of that kind, "
@@ -145,7 +146,7 @@ nonisolated enum PredictionPrompts {
                                         "either": "nothing here says which; they will pick either way"]],
         ]
         let body: [String: Any] = ["model": model, "state": state, "questions": questions]
-        let data = (try? JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])) ?? Data()
+        let data = (try? JSONSerialization.data(withJSONObject: body, options: [.sortedKeys, .withoutEscapingSlashes])) ?? Data()
         return String(decoding: data, as: UTF8.self)
     }
 
@@ -168,7 +169,7 @@ nonisolated enum PredictionPrompts {
 
     private static func json(_ context: PredictionContext) -> String {
         let encoder = JSONEncoder()
-        encoder.outputFormatting = [.sortedKeys]
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
         return (try? encoder.encode(context)).map { String(decoding: $0, as: UTF8.self) } ?? "{}"
     }
 

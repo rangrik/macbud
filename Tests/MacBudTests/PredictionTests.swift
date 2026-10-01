@@ -4,7 +4,7 @@ import Testing
 
 @MainActor @Suite struct PredictionTests {
     /// Seam: store items and outcomes → prompt text. Catches clipboard text, paths, file names, dictation text
-    /// or window titles reaching Codex, and the running apps an `app` pick needs not reaching it.
+    /// or an app card's window title reaching a model, and the running apps an `app` pick needs not reaching it.
     @Test func promptsCarryMetadataOnly() {
         let now = Date.now
         let clips = [ClipboardItem(id: UUID(), kind: .text, copiedAt: now - 5, text: "hunter2-token", byteCount: 13,
@@ -64,7 +64,13 @@ import Testing
         let luna = FakeRunner(["shadow": .success(#"{"kind":"text","hint":"any","confidence":0.5,"note":"n"}"#)])
         let (scored, _) = makePredictor(jev, context, memory, codex: luna)
         await scored.start()
-        await scored.refresh(context)?.value
+        await scored.activity.record(ActivityEvent(t: .now, app: "com.apple.dt.Xcode", title: "Plan.swift", url: "github.com/rangrik/macbud"))
+        let now = scored.context()
+        await scored.refresh(now)?.value
+        let sent = "just now: com.apple.dt.Xcode, “Plan.swift”, github.com/rangrik/macbud"
+        #expect(now.activity == sent && scored.calls.count == 2 && scored.calls.allSatisfy { $0.activity == sent })
+        #expect(await jev.prompts["driver"]?.contains(sent) == true)
+        #expect(await luna.prompts["shadow"]?.contains(sent) == true)
         #expect(scored.intentForOpen { _ in "shelf" }?.kind == .snippet)
         scored.noteAction("copy", outcome: Outcome(kind: .text), in: "shelf")
         scored.sessionEnded()
@@ -75,6 +81,45 @@ import Testing
         #expect(rates.jev.model.total == 1 && rates.jev.model.hits == 0 && rates.jev.shadow.hits == 1 && rates.jev.landedWhereShadow.hits == 0)
         #expect(rates.luna.model.hits == 1 && rates.luna.shadow.total == 1 && rates.luna.shadow.hits == 0)
         #expect(scored.callsToday == 1, "shadow calls stay outside the cap")
+    }
+
+    /// Seam: an Accessibility read → the recorded event. Catches reading while locked, idle or untrusted,
+    /// a secure field's window being read, and file paths or query strings kept as web addresses.
+    @Test func activityRecordsOnlyWhatIsAllowed() {
+        for (trusted, locked, idle) in [(false, false, 0.0), (true, true, 0), (true, false, 300)] {
+            #expect(ActivityProbe.gate(trusted: trusted, locked: locked, idle: idle) { Issue.record("read while blocked"); return nil } == nil)
+        }
+        let secure = ActivityEvent.read(t: .now, app: "com.apple.Safari", role: "AXTextField", subrole: "AXSecureTextField") {
+            Issue.record("a secure field's window was read")
+            return ("Bank login", "https://bank.example/login")
+        }
+        #expect(secure == ActivityEvent(t: secure.t, app: "com.apple.Safari", role: "secure field"))
+        let page = ActivityEvent.read(t: .now, app: "com.apple.Safari", role: "AXTextArea", subrole: nil) {
+            ("Pull requests", URL(string: "https://github.com/rangrik/macbud/pulls?token=abc#top"))
+        }
+        #expect(page.title == "Pull requests" && page.url == "github.com/rangrik/macbud/pulls" && page.role == "text area")
+        for raw in ["file:///Users/owner/Private/Plan.pdf", "not a url", 42] as [Any] { #expect(ActivityEvent.webAddress(raw) == nil) }
+    }
+
+    /// Seam: recorded events → the activity file and the line both models read. Catches a day-old event surviving a relaunch,
+    /// a line past 10 minutes or 8 events or out of order, and a role-only change counted as a change worth a call.
+    @Test func activityFileAndLineStayBounded() async {
+        let memory = DataStore(directory: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString))
+        let now = Date.now
+        await memory.appendLine(ActivityEvent(t: now - 86_000, app: "com.old.App"), to: ActivityLog.file)
+        let log = ActivityLog(memory: memory) { _, _ in nil }
+        await log.load()
+        #expect(log.line(now: now) == "No recent activity.")
+        #expect(await memory.lines(ActivityEvent.self, in: ActivityLog.file).isEmpty)
+        await log.record(ActivityEvent(t: now - 700, app: "com.too.Old"))
+        for i in 0..<10 { await log.record(ActivityEvent(t: now - 590 + Double(i) * 60, app: "app\(i)", title: "T\(i)")) }
+        let parts = log.line(now: now).components(separatedBy: "; ")
+        #expect(parts.count == 8 && parts.first == "7 min ago: app2, “T2”" && parts.last == "just now: app9, “T9”")
+        let changed = log.changedAt
+        await log.record(ActivityEvent(t: now, app: "app9", title: "T9", role: "text field"))
+        #expect(log.changedAt == changed && log.events.last?.role == "text field")
+        await log.record(ActivityEvent(t: now, app: "app9", title: "T9", url: "example.com/b", role: "text field"))
+        #expect(log.changedAt == now)
     }
 
     /// Seam: runner failure → open path. Catches a broken CLI leaving the open without the rules' pick.
@@ -204,7 +249,7 @@ import Testing
                                _ memory: DataStore = DataStore(directory: FileManager.default.temporaryDirectory
                                    .appendingPathComponent(UUID().uuidString)), codex: FakeRunner = FakeRunner([:], path: nil)) -> (SectionPredictor, AppSettings) {
         let settings = AppSettings(defaults: UserDefaults(suiteName: UUID().uuidString)!)
-        return (SectionPredictor(settings: settings, memory: memory, driver: jev, codex: codex) { context }, settings)
+        return (SectionPredictor(settings: settings, memory: memory, driver: jev, codex: codex, probe: { _, _ in nil }) { context }, settings)
     }
 }
 

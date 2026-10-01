@@ -1,6 +1,7 @@
 import Foundation
 
-/// What the models may see about a moment. Metadata only: no text, file names, paths or window titles.
+/// What the models may see about a moment: metadata, plus the activity line with window titles and web addresses.
+/// Never item text, file names or paths.
 nonisolated struct PredictionContext: Codable, Equatable, Sendable {
     var hour: Int
     var weekday: String
@@ -16,6 +17,15 @@ nonisolated struct PredictionContext: Codable, Equatable, Sendable {
     var dictationAge: Int?
     /// Kinds the owner can reach now; hidden features drop out.
     var kinds: [IntentKind]
+    /// `ActivityLog.line`, exactly as both models get it.
+    var activity: String?
+    /// `ActivityLog.focus`: keys the cache, never sent or stored.
+    var focus: String?
+
+    enum CodingKeys: String, CodingKey {
+        case hour, weekday, app, previousApp, runningApps, clipboardKind, clipboardSource, clipboardAge, screenshotKind, screenshotAge
+        case dictationAge, kinds, activity
+    }
 
     static func capture(clipboard: [ClipboardItem], media: [MediaItem], dictations: [DictationHistoryItem],
                         app: String?, running: [String] = [], kinds: [IntentKind], now: Date = .now) -> PredictionContext {
@@ -38,7 +48,7 @@ nonisolated struct PredictionContext: Codable, Equatable, Sendable {
     var key: String {
         func recent(_ age: Int?, _ flag: String) -> String { (age ?? .max) < 120 ? flag : "" }
         let flags = recent(clipboardAge, "c") + recent(screenshotAge, "s") + recent(dictationAge, "d")
-        return [app ?? "-", String(hour), flags, clipboardKind ?? "-"].joined(separator: "|")
+        return [app ?? "-", String(hour), flags, clipboardKind ?? "-", focus ?? "-"].joined(separator: "|")
     }
 
     /// The pick that needs no model: a screenshot or dictation from the last minute, else text.
@@ -108,6 +118,8 @@ nonisolated struct CallRecord: Codable, Identifiable, Sendable {
     /// Luna's Codex thread and its turn number; nil for a call that kept no thread.
     var thread: String?
     var turn: Int?
+    /// The activity line this call sent; nil on calls from before there was one.
+    var activity: String?
     var id: Date { t }
 }
 

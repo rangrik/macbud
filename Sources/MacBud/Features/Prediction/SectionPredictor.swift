@@ -30,6 +30,7 @@ final class SectionPredictor {
     let codex: any ModelRunner
     static let jevModel = "jev-latest"
     let memory: DataStore
+    let activity: ActivityLog
     private let settings: AppSettings
     private let capture: () -> PredictionContext
     /// Jev's state; Codex trouble shows only in `codexPath` and the ledger.
@@ -60,9 +61,10 @@ final class SectionPredictor {
     @ObservationIgnored private var timer: Timer?
 
     init(settings: AppSettings, memory: DataStore, driver: any ModelRunner, codex: any ModelRunner,
-         capture: @escaping () -> PredictionContext) {
+         probe: @escaping @Sendable (pid_t, String?) -> ActivityEvent? = ActivityProbe.read, capture: @escaping () -> PredictionContext) {
         self.settings = settings
         self.memory = memory
+        activity = ActivityLog(memory: memory, probe: probe)
         self.driver = driver
         self.codex = codex
         self.capture = capture
@@ -78,6 +80,7 @@ final class SectionPredictor {
         let saved = await memory.text("strategies.md")
         strategies = saved?.text ?? ""
         lastReview = saved?.modified
+        await activity.load()
         if await driver.codexPath() == nil { status = .missingKey }
         codexPath = await codex.codexPath()
         let timer = Timer(timeInterval: 5, repeats: true) { [weak self] _ in MainActor.assumeIsolated { self?.tick() } }
@@ -88,8 +91,10 @@ final class SectionPredictor {
 
     /// A key must hold for one tick before Jev is asked, which debounces bursts of changes.
     private func tick() {
+        activity.pruneIfDue(now: .now)
         guard settings.prediction.enabled else { return }
-        let context = capture()
+        Task { await activity.sample() }
+        let context = self.context()
         // A younger item means a new one arrived, even when the key stays the same; log it so Luna hears of it.
         let ages = [context.clipboardAge, context.screenshotAge, context.dictationAge]
         let newItem = zip(ages, lastAges).contains { ($0 ?? .max) < ($1 ?? .max) }
@@ -108,6 +113,14 @@ final class SectionPredictor {
         reviewIfDue()
     }
 
+    /// What both models are told about this moment. Reads memory only, never Accessibility, so an open can afford it.
+    func context() -> PredictionContext {
+        var context = capture()
+        context.activity = activity.line(now: .now)
+        context.focus = activity.focus(app: context.app, now: .now)
+        return context
+    }
+
     private func fresh(_ pick: ModelPick?) -> ModelPick? {
         guard let pick, settings.prediction.useModel, Date.now.timeIntervalSince(pick.madeAt) < 30 * 60 else { return nil }
         return pick
@@ -119,7 +132,7 @@ final class SectionPredictor {
     /// `opened` says where the UI put it, for the log.
     func intentForOpen(opened: (LandingIntent) -> String) -> LandingIntent? {
         let started = ContinuousClock.now
-        let context = capture()
+        let context = self.context()
         let model = fresh(cache[context.key]).flatMap { context.kinds.contains($0.intent.kind) ? $0 : nil }
         guard let landed = model?.intent ?? context.heuristic else { return nil }
         let source = model == nil ? "heuristic" : "model"
@@ -165,7 +178,7 @@ final class SectionPredictor {
         let prompt = PredictionPrompts.jev(context: context, strategies: strategies, recent: Array(sessions.filter { $0.hit != nil }.suffix(15)),
                                            model: Self.jevModel)
         let reply = await call(ModelCall(purpose: "driver", model: Self.jevModel, effort: "-", prompt: prompt, schema: "",
-                                         timeout: .seconds(10)), on: driver) { DriverReply.parse($0, kinds: context.kinds) }
+                                         timeout: .seconds(10)), on: driver, activity: context.activity) { DriverReply.parse($0, kinds: context.kinds) }
         nextCall = .now + (reply != nil ? 20 : 300)
         if let reply { remember(pick(reply, context, model: Self.jevModel), in: &cache) }
         return shadow
@@ -187,7 +200,7 @@ final class SectionPredictor {
         } ?? PredictionPrompts.luna(context: context, strategies: strategies, recent: Array(sessions.filter { $0.hit != nil }.suffix(15)))
         let reply = await call(ModelCall(purpose: "shadow", model: config.lunaModel, effort: config.lunaEffort, prompt: prompt,
                                          schema: PredictionPrompts.lunaSchema(context.kinds), timeout: .seconds(30),
-                                         keepThread: true, thread: resume?.id), on: codex) {
+                                         keepThread: true, thread: resume?.id), on: codex, activity: context.activity) {
             DriverReply.parse($0, kinds: context.kinds)
         }
         // A lost thread is not an outage: start a new one on the next call.
@@ -249,9 +262,9 @@ final class SectionPredictor {
     }
 
     /// Every call lands in the ledger, whatever happens, so the owner can read what was sent and received.
-    private func call<T>(_ call: ModelCall, on runner: any ModelRunner, parse: (String) -> T?) async -> T? {
+    private func call<T>(_ call: ModelCall, on runner: any ModelRunner, activity: String? = nil, parse: (String) -> T?) async -> T? {
         let started = Date.now
-        var record = CallRecord(t: started, purpose: call.purpose, model: call.model, effort: call.effort, prompt: call.prompt)
+        var record = CallRecord(t: started, purpose: call.purpose, model: call.model, effort: call.effort, prompt: call.prompt, activity: activity)
         var result: T?
         do {
             let reply = try await runner.run(call)
@@ -309,12 +322,13 @@ final class SectionPredictor {
         open = nil
         events = []
         thread = nil
+        await activity.reset()
         await memory.remove(["events.jsonl", "predictions.jsonl", "strategies.md", "driver.jsonl"])
     }
 
     func dump() -> [String: Any] {
         let last = sessions.last.flatMap { try? JSONSerialization.jsonObject(with: JSONEncoder().encode($0)) }
-        return ["status": String(describing: status), "busy": isBusy, "cached": cache.count, "key": capture().key,
+        return ["status": String(describing: status), "busy": isBusy, "cached": cache.count, "key": context().key,
                 "sessions": sessions.count, "unreviewedMisses": unreviewedMisses.count, "callsToday": callsToday,
                 "strategyLines": strategies.split(separator: "\n").count, "lastReview": lastReview?.ISO8601Format() ?? "",
                 "thread": thread?.id ?? "", "threadTurns": thread?.turns ?? 0, "threadSize": thread?.size ?? 0,
