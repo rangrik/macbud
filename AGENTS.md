@@ -28,8 +28,8 @@ profiles):
 | role        | model       | provider | effort | mode        |
 |-------------|-------------|----------|--------|-------------|
 | manager     | fable-5.1   | claude   | high   | auto        |
-| wayfinder   | fable-5.1   | claude   | high   | auto        |
-| implementor | gpt-6-astra | codex    | high   | auto-review |
+| wayfinder   | gpt-6-astra | codex    | high   | auto-review |
+| implementor | opus-5.5    | claude   | xhigh  | auto        |
 | qa          | opus-5.5    | claude   | xhigh  | auto        |
 
 - Every agent is started with this one-line prompt and nothing else:
@@ -39,9 +39,10 @@ profiles):
   (Claude Code `Agent`/`Task`; Codex Subagents). The user must be able to open and steer any agent.
   Paseo lists such children under a track named "Subagents"; that is not the banned tool.
 - The wayfinder is each workspace's inbox. The implementor and QA never ask the user; they write
-  `Q<n>` to `questions.md` and ring the wayfinder, which asks the user with `AskUserQuestion` so
-  Paseo flags the session "needs you". The manager is the inbox for intake. The Codex implementor
-  cannot flag "needs you" at all, which is why it never asks directly.
+  `Q<n>` to `questions.md` and ring the wayfinder, which asks the user in its own session. The
+  wayfinder runs on Codex, which cannot put a session in Paseo's "needs you" state, so the user
+  opens the wayfinder session to see its questions. The manager, on Claude, is the inbox for intake
+  and does flag "needs you".
 - Agent-to-agent prompts start with `[from <role>]`; a message without that tag is the user. The
   wayfinder writes each child's role file to `workspace_management/roles/<role>.md` at spawn, so the
   Codex sandbox (no network) can still start on the latest text.
@@ -57,7 +58,8 @@ profiles):
 - The user has severe ADHD and is accountable for everything you do. Clarity over volume.
 - Every message: a one-line headline, then `N of M done · next: <step>` counted from the role's
   fixed step list (Paseo sessions have no task-list tool), then only what they need.
-- One question per message, through `AskUserQuestion` (Claude roles), never plain text: the question
+- One question per message, through `AskUserQuestion` (Claude roles) or `request_user_input`
+  (Codex roles; plain text in the same shape when it is unavailable): the question
   in one line plus `If you pick nothing: <what waits>` as the question text; 2 to 4 options with a
   one-line implication each; the recommended option first, labelled `(Recommended)`, with its
   reason. Picking it is the user's "your call".

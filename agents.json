@@ -10,8 +10,8 @@
   },
   "roles": {
     "manager":     { "model": "fable-5.1",   "effort": "high", "instructions": "https://raw.githubusercontent.com/rangrik/Skills/main/instructions/fable-5.1/manager.md" },
-    "wayfinder":   { "model": "fable-5.1",   "effort": "high", "instructions": "https://raw.githubusercontent.com/rangrik/Skills/main/instructions/fable-5.1/wayfinder.md",     "input": "brief.md" },
-    "implementor": { "model": "gpt-6-astra", "effort": "high", "instructions": "https://raw.githubusercontent.com/rangrik/Skills/main/instructions/gpt-6-astra/implementor.md", "input": "plan.md" },
+    "wayfinder":   { "model": "gpt-6-astra", "effort": "high", "instructions": "https://raw.githubusercontent.com/rangrik/Skills/main/instructions/gpt-6-astra/wayfinder.md",   "input": "brief.md" },
+    "implementor": { "model": "opus-5.5",    "effort": "xhigh", "instructions": "https://raw.githubusercontent.com/rangrik/Skills/main/instructions/opus-5.5/implementor.md",   "input": "plan.md" },
     "qa":          { "model": "opus-5.5",    "effort": "xhigh", "instructions": "https://raw.githubusercontent.com/rangrik/Skills/main/instructions/opus-5.5/qa.md",            "input": "implementation.md" }
   }
 }
