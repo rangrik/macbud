@@ -122,6 +122,36 @@ import Testing
         #expect(log.changedAt == now)
     }
 
+    /// Seam: activity changes and opens → when Jev is asked. Catches a refresh before 10 quiet seconds, a role-only change
+    /// or a current pick asking again, a same-host page change not asking, an open waiting past its budget or the cap,
+    /// and a late reply changing an open that already landed.
+    @Test func jevIsAskedWhenTheMomentChangesOrAnOpenNeedsIt() async throws {
+        let jev = FakeRunner(["driver": .success(#"{"kind":"snippet","hint":"any","confidence":0.9,"note":"n"}"#)])
+        let (predictor, settings) = makePredictor(jev, context())
+        await predictor.start()
+        let t = Date.now
+        await predictor.activity.record(ActivityEvent(t: t, app: "com.apple.dt.Xcode", title: "Plan", url: "github.com/a"))
+        let now = predictor.context()
+        #expect(!predictor.wantsRefresh(now, at: t + 9) && predictor.wantsRefresh(now, at: t + 10))
+        await jev.hold()
+        #expect(predictor.wantsCallBeforeOpen(now))
+        await predictor.callBeforeOpen(now, budget: .milliseconds(50))
+        #expect(predictor.intentForOpen(now) { _ in "shelf" }?.kind == .text, "Jev missed the budget, so the rules land")
+        await jev.release()
+        for _ in 0..<200 where predictor.status != .ready { try await Task.sleep(for: .milliseconds(5)) }
+        predictor.noteAction("copy", outcome: Outcome(kind: .snippet), in: "shelf")
+        predictor.sessionEnded()
+        #expect(predictor.sessions.last?.landed.kind == .text && predictor.sessions.last?.source == "heuristic")
+        #expect(!predictor.wantsCallBeforeOpen(now) && !predictor.wantsRefresh(now, at: t + 60))
+        await predictor.activity.record(ActivityEvent(t: t + 20, app: "com.apple.dt.Xcode", title: "Plan", url: "github.com/a", role: "text field"))
+        #expect(!predictor.wantsRefresh(predictor.context(), at: t + 60))
+        await predictor.activity.record(ActivityEvent(t: t + 30, app: "com.apple.dt.Xcode", title: "Plan", url: "github.com/b"))
+        let moved = predictor.context()
+        #expect(moved.key == now.key && predictor.wantsRefresh(moved, at: t + 40) && predictor.wantsCallBeforeOpen(moved))
+        settings.prediction.dailyCallCap = 1
+        #expect(!predictor.wantsCallBeforeOpen(moved))
+    }
+
     /// Seam: runner failure → open path. Catches a broken CLI leaving the open without the rules' pick.
     @Test func failingRunnerLeavesTheRulesInCharge() async {
         let context = context(screenshotAge: 10)
@@ -253,18 +283,21 @@ import Testing
     }
 }
 
-private actor FakeRunner: ModelRunner {
+actor FakeRunner: ModelRunner {
     let replies: [String: Result<String, ModelError>]
     let path: String?
     var prompts: [String: String] = [:]
     /// Kept threads and their turn counts, like Codex's stored sessions.
     var threads: [String: Int] = [:], made = 0
+    /// While held, calls wait for `release`, like a slow network.
+    private var holding = false, held: [CheckedContinuation<Void, Never>] = []
 
     init(_ replies: [String: Result<String, ModelError>], path: String? = "/fake/codex") { self.replies = replies; self.path = path }
 
     func codexPath() async -> String? { path }
     func run(_ call: ModelCall) async throws -> ModelReply {
         prompts[call.purpose] = call.prompt
+        if holding { await withCheckedContinuation { held.append($0) } }
         var id: String?
         if call.keepThread {
             if let old = call.thread, threads[old] == nil { throw ModelError(message: "no rollout found", threadGone: true) }
@@ -278,4 +311,6 @@ private actor FakeRunner: ModelRunner {
     }
 
     func forget(_ id: String) { threads[id] = nil }
+    func hold() { holding = true }
+    func release() { holding = false; held.forEach { $0.resume() }; held = [] }
 }

@@ -123,6 +123,14 @@ final class NotchController {
         for screen in screens { screen.isActive = screen.displayID == id }
     }
 
+    /// The notch an open would use now: the pointer's display, else the focused window's.
+    func notchForOpen() -> ScreenNotch? {
+        syncScreens()
+        guard let screen = NotchGeometry.activeScreen() else { return nil }
+        let id = NotchGeometry.detect(on: screen).displayID
+        return screens.first { $0.displayID == id }
+    }
+
     /// Move the panel to the display the user is on. Called every time the notch is asked to open.
     private func retargetToActiveScreen() {
         syncScreens()

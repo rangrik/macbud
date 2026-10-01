@@ -2,6 +2,7 @@ import Foundation
 
 /// Picks where a plain open lands and learns from where the owner ends up.
 /// Jev drives; Luna answers the same moments in the shadow; a Codex reviewer rewrites the rules both read.
+/// Calls run in the background; an open with no current pick may wait briefly for Jev, never for Luna.
 @Observable
 final class SectionPredictor {
     enum Status: Equatable { case waiting, ready, off, missingKey, capReached, failed(String) }
@@ -51,6 +52,10 @@ final class SectionPredictor {
     @ObservationIgnored private var cache: [String: ModelPick] = [:]
     @ObservationIgnored private var shadowCache: [String: ModelPick] = [:]
     @ObservationIgnored private var driverBusy = false
+    /// Jev's key was found; until then an open never waits.
+    @ObservationIgnored private var driverReady = false
+    /// After a failed Jev call, opens stop asking until this time.
+    @ObservationIgnored private var retryAt = Date.distantPast
     @ObservationIgnored private var shadowBusy = false
     @ObservationIgnored private var nextShadow = Date.distantPast
     @ObservationIgnored private var open: SessionRecord?
@@ -81,7 +86,8 @@ final class SectionPredictor {
         strategies = saved?.text ?? ""
         lastReview = saved?.modified
         await activity.load()
-        if await driver.codexPath() == nil { status = .missingKey }
+        driverReady = await driver.codexPath() != nil
+        if !driverReady { status = .missingKey }
         codexPath = await codex.codexPath()
         let timer = Timer(timeInterval: 5, repeats: true) { [weak self] _ in MainActor.assumeIsolated { self?.tick() } }
         timer.tolerance = 1
@@ -89,7 +95,7 @@ final class SectionPredictor {
         self.timer = timer
     }
 
-    /// A key must hold for one tick before Jev is asked, which debounces bursts of changes.
+    /// A key must hold for one tick before Jev is asked, and activity must have held still 10 s.
     private func tick() {
         activity.pruneIfDue(now: .now)
         guard settings.prediction.enabled else { return }
@@ -109,7 +115,7 @@ final class SectionPredictor {
             lastKey = context.key
             return
         }
-        if fresh(cache[context.key]) == nil { Task { await refresh(context) } }
+        if wantsRefresh(context, at: .now) { Task { await refresh(context) } }
         reviewIfDue()
     }
 
@@ -126,13 +132,37 @@ final class SectionPredictor {
         return pick
     }
 
+    /// A pick from before the app, title or address last changed is out of date, though an open may still land on it.
+    private func needsPick(_ pick: ModelPick?) -> Bool {
+        guard let pick = fresh(pick) else { return true }
+        return pick.madeAt < activity.changedAt ?? .distantPast
+    }
+
+    func wantsRefresh(_ context: PredictionContext, at now: Date) -> Bool {
+        now.timeIntervalSince(activity.changedAt ?? .distantPast) >= 10 && needsPick(cache[context.key])
+    }
+
+    /// An open may wait for Jev when it has no current pick and a call is allowed now, cap included.
+    func wantsCallBeforeOpen(_ context: PredictionContext) -> Bool {
+        let config = settings.prediction
+        return config.useModel && driverReady && !driverBusy && Date.now >= retryAt && callsToday < config.dailyCallCap
+            && needsPick(cache[context.key])
+    }
+
+    /// Asks Jev before an open lands, waiting at most `budget`; a later reply fills the cache, never this open.
+    func callBeforeOpen(_ context: PredictionContext, budget: Duration) async {
+        let wait = Task { try? await Task.sleep(for: budget) }
+        Task { await refresh(context, onOpen: true); wait.cancel() }
+        await wait.value
+    }
+
     // MARK: Opening and outcome
 
     /// What a plain open should land on: Jev's fresh intent for this context, else the heuristic's.
     /// `opened` says where the UI put it, for the log.
-    func intentForOpen(opened: (LandingIntent) -> String) -> LandingIntent? {
+    func intentForOpen(_ context: PredictionContext? = nil, opened: (LandingIntent) -> String) -> LandingIntent? {
         let started = ContinuousClock.now
-        let context = self.context()
+        let context = context ?? self.context()
         let model = fresh(cache[context.key]).flatMap { context.kinds.contains($0.intent.kind) ? $0 : nil }
         guard let landed = model?.intent ?? context.heuristic else { return nil }
         let source = model == nil ? "heuristic" : "model"
@@ -169,10 +199,10 @@ final class SectionPredictor {
     // MARK: Model calls
 
     /// Asks Jev about `context` and caches its pick; Luna is asked about the same moment, never more often.
-    /// Returns Luna's call, which usually outlasts Jev's.
+    /// An open skips the 20 s pause after a success, not the cap or the pause after a failure. Returns Luna's call.
     @discardableResult
-    func refresh(_ context: PredictionContext) async -> Task<Void, Never>? {
-        guard await mayAskDriver(after: nextCall) else { return nil }
+    func refresh(_ context: PredictionContext, onOpen: Bool = false) async -> Task<Void, Never>? {
+        guard await mayAskDriver(after: onOpen ? retryAt : nextCall) else { return nil }
         defer { driverBusy = false }
         let shadow = Task { await shadowRefresh(context) }
         let prompt = PredictionPrompts.jev(context: context, strategies: strategies, recent: Array(sessions.filter { $0.hit != nil }.suffix(15)),
@@ -180,6 +210,7 @@ final class SectionPredictor {
         let reply = await call(ModelCall(purpose: "driver", model: Self.jevModel, effort: "-", prompt: prompt, schema: "",
                                          timeout: .seconds(10)), on: driver, activity: context.activity) { DriverReply.parse($0, kinds: context.kinds) }
         nextCall = .now + (reply != nil ? 20 : 300)
+        retryAt = reply != nil ? .distantPast : nextCall
         if let reply { remember(pick(reply, context, model: Self.jevModel), in: &cache) }
         return shadow
     }
@@ -207,6 +238,8 @@ final class SectionPredictor {
         let lost = resume != nil && thread == nil
         guard let reply else { if !lost { nextShadow = .now + 300 }; return }
         remember(pick(reply, context, model: config.lunaModel), in: &shadowCache)
+        // An open that came before Luna's answer for its moment still gets it.
+        if open?.context.key == context.key, open?.shadow == nil { open?.shadow = shadowCache[context.key] }
     }
 
     private func pick(_ reply: DriverReply, _ context: PredictionContext, model: String) -> ModelPick {
@@ -255,7 +288,8 @@ final class SectionPredictor {
         guard settings.prediction.useModel else { status = .off; return false }
         guard !driverBusy, Date.now >= time else { return false }
         guard callsToday < settings.prediction.dailyCallCap else { status = .capReached; return false }
-        guard await driver.codexPath() != nil else { status = .missingKey; return false }
+        driverReady = await driver.codexPath() != nil
+        guard driverReady else { status = .missingKey; return false }
         guard !driverBusy else { return false }
         driverBusy = true
         return true
