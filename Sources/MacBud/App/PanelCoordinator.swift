@@ -142,8 +142,8 @@ final class PanelCoordinator {
             guard let self, !Task.isCancelled else { return }
             pendingOpen = nil
             Trace.log("plain open waited for Jev \(ContinuousClock.now - started)")
-            // Something else opened meanwhile, or a hover has left the notch: this open is no longer wanted.
-            guard !state.isOpen, focus || target.map({ NSMouseInRect(NSEvent.mouseLocation, $0.window.frame, false) }) ?? true else { return }
+            // Something else opened meanwhile, or a hover has left its notch: this open is no longer wanted.
+            guard !state.isOpen, focus || screen.map({ NSMouseInRect(NSEvent.mouseLocation, $0.window.frame, false) }) ?? true else { return }
             landShelf(context, on: target, focus: focus)
         }
         pendingOpen = (task, focus)
