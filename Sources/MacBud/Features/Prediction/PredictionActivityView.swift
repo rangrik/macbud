@@ -96,10 +96,11 @@ struct PredictionActivityView: View {
                     if usage.isEmpty { Text("No calls") }
                     ForEach(usage, id: \.model) { Text("\($0.model): \($0.calls) calls · \($0.tokens) tokens (\($0.cached) cached)") }
                 }
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("Last 7 days").font(.caption.bold()).foregroundStyle(.secondary)
-                    Text("Jev \(predictor.rates.jev.model.text)")
-                    Text("Rules \(predictor.rates.jev.rules.text)")
+                ForEach(predictor.cohorts, id: \.title) { cohort in
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(cohort.title).font(.caption.bold()).foregroundStyle(.secondary)
+                        ForEach(cohort.rows, id: \.label) { Text("\($0.label) \($0.rate.text)") }
+                    }
                 }
                 Spacer()
                 VStack(alignment: .trailing, spacing: 6) {
@@ -113,7 +114,7 @@ struct PredictionActivityView: View {
                         Button("Export…") { export(shown) }.disabled(shown.isEmpty)
                     }
                     if predictor.isBusy {
-                        HStack(spacing: 6) { ProgressView().controlSize(.small); Text("A model call is running…") }
+                        HStack(spacing: 6) { ProgressView().controlSize(.small); Text("The reviewer is running…") }
                             .font(.caption).foregroundStyle(.secondary)
                     }
                 }
@@ -123,7 +124,7 @@ struct PredictionActivityView: View {
                     .font(.system(size: 11, design: .monospaced)).textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading).padding(.top, 4)
             } label: {
-                Text("Strategies the driver reads" + (predictor.lastReview.map { " · written \($0.formatted(date: .abbreviated, time: .shortened))" } ?? ""))
+                Text("Strategies both models read" + (predictor.lastReview.map { " · written \($0.formatted(date: .abbreviated, time: .shortened))" } ?? ""))
             }
         }
         .padding(12)

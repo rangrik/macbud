@@ -29,7 +29,7 @@ final class SectionPredictor {
     let driver: any ModelRunner
     /// Codex: Luna in the shadow, on one kept thread, and the reviewer.
     let codex: any ModelRunner
-    static let jevModel = "jev-latest"
+    nonisolated static let jevModel = "jev-latest"
     let memory: DataStore
     let activity: ActivityLog
     private let settings: AppSettings
@@ -345,6 +345,16 @@ final class SectionPredictor {
             if s.driver == Self.jevModel { jev.add(s, outcome) } else { luna.add(s, outcome) }
         }
         return (jev, luna)
+    }
+
+    /// Rate rows per period, current first, for Settings and the Activity window alike.
+    var cohorts: [(title: String, rows: [(label: String, rate: Rate)])] {
+        let (jev, luna) = rates
+        let since = jevSince?.formatted(date: .abbreviated, time: .omitted)
+        return [(since.map { "Jev driving since \($0)" } ?? "Jev driving, no opens yet",
+                 [("Jev", jev.model), ("Luna in the shadow", jev.shadow), ("Rules", jev.rules)]),
+                (since.map { "Luna driving, before \($0)" } ?? "Luna driving, before Jev",
+                 [("Luna", luna.model), ("Jev in the shadow", luna.shadow), ("Rules", luna.rules)])]
     }
 
     func resetMemory() async {

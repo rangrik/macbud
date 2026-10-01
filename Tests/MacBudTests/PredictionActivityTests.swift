@@ -20,8 +20,27 @@ import Testing
         #expect(rows.map(\.kind) == [.reviewer, .miss, .open, .capReached, .error, .driver, .driver])
         #expect(rows[1].summary == "Miss: opened on screenshot · newest, used dictation · newest")
         #expect(rows[1].linkedCall?.t == used.t)
-        #expect(rows[6].summary == "Driver said screenshot · newest, 0.82, 4.8 s, 9.2k tokens")
+        #expect(rows[6].summary == "Driver luna said screenshot · newest, 0.82, 4.8 s, 9.2k tokens")
         #expect(rows[6].linkedOpens.count == 1 && rows[5].linkedOpens.isEmpty)
+    }
+
+    /// Seam: records → their details. Catches an activity line recomputed or dropped instead of shown as sent, an old call
+    /// claiming activity, and an open from before the swap relabelled as Jev driving with Luna in the shadow.
+    @Test func detailsShowTheActivitySentAndKeepOldLabels() {
+        let sent = CallRecord(t: .now, purpose: "shadow", model: "gpt-6-luna", effort: "medium", prompt: "p", reply: "{}",
+                              activity: "just now: com.apple.Safari, “Docs”")
+        let old = CallRecord(t: .now - 60, purpose: "driver", model: "gpt-6-luna", effort: "medium", prompt: "p", reply: "{}")
+        let rows = PredictionActivity.timeline(calls: [old, sent], sessions: [], cap: 100)
+        let seen = rows.map { row in PredictionActivity.details(row).first { $0.title == "Activity the model saw" }?.text }
+        #expect(seen == ["just now: com.apple.Safari, “Docs”", "Not recorded for this call."] && rows[0].summary.hasPrefix("Shadow gpt-6-luna said"))
+        let pick = ModelPick(intent: LandingIntent(kind: .text), note: "n", key: "k", madeAt: .now)
+        var open = SessionRecord(t: .now, context: PredictionContext(hour: 10, weekday: "Thu", kinds: [.text]), model: pick,
+                                 landed: pick.intent, source: "model", opened: "shelf", shadow: pick)
+        func titles() -> [String] { PredictionActivity.details(ActivityEntry(id: "o", t: open.t, kind: .open, summary: "", session: open)).map(\.title) }
+        #expect(titles().contains("Jev, in the shadow") && PredictionActivity.timeline(calls: [], sessions: [open], cap: 1)[0].summary.hasSuffix("(model, 1.00)"))
+        open.driver = "jev-latest"
+        open.shadow?.model = "gpt-6-luna"
+        #expect(titles().contains("gpt-6-luna, in the shadow") && PredictionActivity.timeline(calls: [], sessions: [open], cap: 1)[0].summary.hasSuffix("(Jev, 1.00)"))
     }
 
     /// Seam: the reviewer's prompt and reply → strategies diff. Catches a prompt change that hides "before".

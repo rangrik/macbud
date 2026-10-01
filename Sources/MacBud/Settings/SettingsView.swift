@@ -67,7 +67,7 @@ struct GeneralSettings: View {
                 LabeledContent("Accessibility") {
                     HStack {
                         StatusDot(ok: accessibilityTrusted)
-                        Text(accessibilityTrusted ? "Granted — paste into apps works" : "Needed only to paste directly into apps")
+                        Text(accessibilityTrusted ? "Granted. Pasting and activity context are on." : "Needed to paste into apps and to see what you are working on.")
                         Button("Open Settings") { Paster.promptForAccessibility(); Paster.openAccessibilitySettings() }
                     }
                 }
