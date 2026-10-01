@@ -98,8 +98,8 @@ struct PredictionActivityView: View {
                 }
                 VStack(alignment: .leading, spacing: 3) {
                     Text("Last 7 days").font(.caption.bold()).foregroundStyle(.secondary)
-                    Text("Model \(predictor.rates.model.text)")
-                    Text("Rules \(predictor.rates.heuristic.text)")
+                    Text("Jev \(predictor.rates.jev.model.text)")
+                    Text("Rules \(predictor.rates.jev.rules.text)")
                 }
                 Spacer()
                 VStack(alignment: .trailing, spacing: 6) {

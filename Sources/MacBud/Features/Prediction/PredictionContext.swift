@@ -51,12 +51,14 @@ nonisolated struct PredictionContext: Codable, Equatable, Sendable {
     }
 }
 
-/// The driver's cached answer for one context key.
+/// A model's cached answer for one context key.
 nonisolated struct ModelPick: Codable, Equatable, Sendable {
     var intent: LandingIntent
     var note: String
     var key: String
     var madeAt: Date
+    /// Who answered; nil on picks made before the seats swapped.
+    var model: String?
 }
 
 /// One plain open of the island: what we predicted, and what the owner used.
@@ -67,13 +69,15 @@ nonisolated struct SessionRecord: Codable, Identifiable, Sendable {
     var model: ModelPick?
     var landed: LandingIntent
     var source: String
+    /// The model in the driver's seat; nil on opens from before Jev drove, when Luna did.
+    var driver: String?
     /// Where the open landed and where the owner acted: "shelf" or a chip. Older records name tabs.
     var opened: String
     var actedIn: String?
     var outcome: Outcome?
     var action: String?
     var secs: Double?
-    /// Jev's pick for the same moment, scored but never landed on.
+    /// The shadow's pick for the same moment, scored but never landed on.
     var shadow: ModelPick?
     var shadowHit: Bool?
     /// Nil when the owner used nothing, so there is nothing to score.
@@ -101,7 +105,7 @@ nonisolated struct CallRecord: Codable, Identifiable, Sendable {
     var tokens: TokenUsage?
     var prompt: String
     var reply: String?
-    /// The driver's Codex thread and its turn number; nil for a call that kept no thread.
+    /// Luna's Codex thread and its turn number; nil for a call that kept no thread.
     var thread: String?
     var turn: Int?
     var id: Date { t }

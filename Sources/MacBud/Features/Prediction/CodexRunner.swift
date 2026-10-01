@@ -26,7 +26,7 @@ nonisolated struct ModelError: LocalizedError, Sendable {
 }
 
 nonisolated protocol ModelRunner: Sendable {
-    /// Nil when the Codex CLI cannot be found.
+    /// Where the runner's CLI or key is; nil when it cannot run.
     func codexPath() async -> String?
     func run(_ call: ModelCall) async throws -> ModelReply
 }

@@ -39,7 +39,7 @@ final class PanelCoordinator {
 
     init(state: NotchState, notch: NotchController, settings: AppSettings,
          clipboardStore: ClipboardStore, snippetStore: SnippetStore, library: ScreenshotLibrary,
-         appIndex: AppIndex = AppIndex(), runner: any ModelRunner = CodexRunner(), shadow: (any ModelRunner)? = JevRunner()) {
+         appIndex: AppIndex = AppIndex(), driver: any ModelRunner = JevRunner(), codex: any ModelRunner = CodexRunner()) {
         self.state = state
         self.notch = notch
         self.settings = settings
@@ -62,7 +62,7 @@ final class PanelCoordinator {
         shelf = ShelfController(state: state, settings: settings, clipboard: clipboard, screenshots: screenshots,
                                 dictations: dictationHistory, snippets: snippets, apps: apps)
         predictor = SectionPredictor(settings: settings, memory: DataStore(directory: snippetStore.dataStore.directory.appendingPathComponent("predict")),
-                                     runner: runner, shadow: shadow) { [dictationHistoryStore] in
+                                     driver: driver, codex: codex) { [dictationHistoryStore] in
             PredictionContext.capture(clipboard: clipboardStore.items, media: library.items, dictations: dictationHistoryStore.items,
                                       app: NSWorkspace.shared.frontmostApplication?.bundleIdentifier,
                                       running: AppIndex.runningInFrontToBackOrder().compactMap(\.bundleIdentifier), kinds: settings.visibleKinds)

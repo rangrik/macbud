@@ -23,7 +23,7 @@ struct PredictionSettings: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
             SwiftUI.Section("Models and limits") {
-                modelRow("Driver (predicts)", model: $settings.prediction.driverModel, effort: $settings.prediction.driverEffort)
+                modelRow("Luna (in the shadow)", model: $settings.prediction.lunaModel, effort: $settings.prediction.lunaEffort)
                 modelRow("Reviewer (learns)", model: $settings.prediction.reviewerModel, effort: $settings.prediction.reviewerEffort)
                 LabeledContent("Codex CLI", value: predictor.codexPath.map { ($0 as NSString).abbreviatingWithTildeInPath } ?? "Not found yet")
                 Text(CodexRunner.signedIn
@@ -38,18 +38,10 @@ struct PredictionSettings: View {
                         in: 10_000...100_000, step: 5_000)
             }
             SwiftUI.Section("How it is doing") {
-                let rates = predictor.rates
-                LabeledContent("Model, last 7 days", value: rates.model.text)
-                LabeledContent("Rules, last 7 days", value: rates.heuristic.text)
-                if rates.model.total > 0 {
-                    Text("On the opens the model answered, the rules would have hit \(rates.heuristicWhereModel.text).")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-                if predictor.shadowReady {
-                    LabeledContent("Jev in the shadow, last 7 days", value: rates.shadow.text)
-                    Text("Jev (\(SectionPredictor.shadowModel)) is asked the same questions but never picks the landing. On the opens it answered, the landing hit \(rates.landedWhereShadow.text).")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
+                let rates = predictor.rates.jev
+                LabeledContent("Jev", value: rates.model.text)
+                LabeledContent("Rules", value: rates.rules.text)
+                LabeledContent("Luna in the shadow", value: rates.shadow.text)
                 LabeledContent("Misses waiting for review", value: "\(predictor.unreviewedMisses.count)")
                 let usage = PredictionActivity.usageToday(predictor.calls)
                 if usage.isEmpty { LabeledContent("Today", value: "No calls") }
@@ -91,7 +83,7 @@ struct PredictionSettings: View {
         case .waiting: (true, "Waiting for the first call.")
         case .ready: (true, "Ready. Rules cover any moment without a fresh pick.")
         case .off: (false, "Codex is off: rules pick the section.")
-        case .missingCLI: (false, "Codex CLI not found in your login shell: rules only.")
+        case .missingKey: (false, "No TypeSafe API key for Jev: rules only.")
         case .capReached: (false, "Daily cap of \(settings.prediction.dailyCallCap) calls reached: rules only until tomorrow.")
         case .failed(let message): (false, "Last call failed: \(message). Rules until it works.")
         }

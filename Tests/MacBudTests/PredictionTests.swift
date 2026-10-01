@@ -23,7 +23,7 @@ import Testing
                               windowID: "w", label: "Layoffs draft.pdf")
         let switched = SessionRecord(t: now, context: context, heuristic: rule, landed: rule, source: "heuristic", opened: "all",
                                      outcome: .app(window, switchTarget: nil), hit: false)
-        for prompt in [PredictionPrompts.driver(context: context, strategies: "", recent: [miss, switched]),
+        for prompt in [PredictionPrompts.luna(context: context, strategies: "", recent: [miss, switched]),
                        PredictionPrompts.delta(context: context, since: now - 60, sessions: [miss, switched], events: [EventRecord(t: now, context: context)],
                                                strategies: "", written: nil),
                        PredictionPrompts.reviewer(strategies: "", misses: [miss, switched], hits: [], rates: "")] {
@@ -37,9 +37,10 @@ import Testing
         #expect(jev.contains("slackmacgap") && jev.contains("Preview") && jev.contains("seconds ago"))
     }
 
-    /// Seam: Jev's answers → the driver's reply shape → a scored shadow on the open.
-    /// Catches a shadow that lands, goes unscored, flips the status, or eats the daily cap.
-    @Test func shadowIsScoredButNeverLands() async throws {
+    /// Seam: Jev's answers → the landing, Luna's → a scored shadow, both stamped with who answered.
+    /// Catches a shadow that lands, goes unscored, flips Jev's status or eats the daily cap, and an open
+    /// from before the swap (Luna driving, Jev in the shadow) counted as Jev's result.
+    @Test func jevDrivesLunaIsScoredInTheShadowAndOldOpensStayApart() async throws {
         let answers = #"""
         {"model":"jev-1.13.0","answers":{"kind":{"type":"choice","choice":"snippet","probabilities":{"snippet":0.7,"text":0.3},"confidence":0.55},
         "which_item":{"type":"choice","choice":"either","probabilities":{"either":0.8,"newest":0.1,"older":0.1},"confidence":0.7}},
@@ -49,29 +50,39 @@ import Testing
         let parsed = try #require(DriverReply.parse(reply.text, kinds: IntentKind.allCases))
         #expect(parsed.kind == .snippet && parsed.hint == .any && parsed.confidence == 0.55 && reply.tokens.input == 900)
         let context = context()
-        let driver = FakeRunner(["driver": .success(#"{"kind":"text","hint":"any","confidence":0.5,"note":"n"}"#)])
-        let (predictor, _) = makePredictor(driver, context, shadow: FakeRunner(["shadow": .failure(ModelError(message: "HTTP 529"))]))
-        await predictor.refresh(context)
-        await predictor.shadowRefresh(context)
-        #expect(predictor.status == .ready && predictor.calls.last?.status == "failed")
-        let (scored, _) = makePredictor(driver, context, shadow: FakeRunner(["shadow": .success(reply.text)]))
-        await scored.refresh(context)
-        await scored.shadowRefresh(context)
-        #expect(scored.intentForOpen { _ in "shelf" }?.kind == .text)
-        scored.noteAction("copy", outcome: Outcome(kind: .snippet), in: "snippets")
+        let jev = FakeRunner(["driver": .success(reply.text)])
+        let (failing, _) = makePredictor(jev, context, codex: FakeRunner(["shadow": .failure(ModelError(message: "Model not supported"))]))
+        await failing.refresh(context)?.value
+        #expect(failing.status == .ready && failing.calls.last { $0.purpose == "shadow" }?.status == "failed")
+
+        let pick = #"{"intent":{"kind":"%@","hint":"any","confidence":0.8},"note":"n","key":"k","madeAt":"2026-09-30T09:59:00Z"}"#
+        let old = #"{"t":"2026-09-30T10:00:00Z","context":{"hour":10,"weekday":"Wed","kinds":["text","snippet"]},"#
+            + #""landed":{"kind":"text","hint":"any","confidence":0.8},"source":"model","opened":"shelf","outcome":{"kind":"text"},"#
+            + #""model":\#(String(format: pick, "text")),"shadow":\#(String(format: pick, "snippet")),"hit":true,"shadowHit":false}"#
+        let memory = DataStore(directory: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString))
+        await memory.writeText(old + "\n", to: "predictions.jsonl")
+        let luna = FakeRunner(["shadow": .success(#"{"kind":"text","hint":"any","confidence":0.5,"note":"n"}"#)])
+        let (scored, _) = makePredictor(jev, context, memory, codex: luna)
+        await scored.start()
+        await scored.refresh(context)?.value
+        #expect(scored.intentForOpen { _ in "shelf" }?.kind == .snippet)
+        scored.noteAction("copy", outcome: Outcome(kind: .text), in: "shelf")
         scored.sessionEnded()
         let session = try #require(scored.sessions.last)
-        #expect(session.hit == false && session.shadowHit == true && session.shadow?.intent.kind == .snippet)
-        #expect(scored.rates.shadow.hits == 1 && scored.rates.landedWhereShadow.total == 1 && scored.rates.landedWhereShadow.hits == 0)
+        #expect(session.hit == false && session.shadowHit == true && session.driver == "jev-latest")
+        #expect(session.model?.model == "jev-latest" && session.shadow?.model == "gpt-6-luna" && scored.jevSince == session.t)
+        let rates = scored.rates
+        #expect(rates.jev.model.total == 1 && rates.jev.model.hits == 0 && rates.jev.shadow.hits == 1 && rates.jev.landedWhereShadow.hits == 0)
+        #expect(rates.luna.model.hits == 1 && rates.luna.shadow.total == 1 && rates.luna.shadow.hits == 0)
         #expect(scored.callsToday == 1, "shadow calls stay outside the cap")
     }
 
     /// Seam: runner failure → open path. Catches a broken CLI leaving the open without the rules' pick.
     @Test func failingRunnerLeavesTheRulesInCharge() async {
         let context = context(screenshotAge: 10)
-        let (predictor, _) = makePredictor(FakeRunner(["driver": .failure(ModelError(message: "Not signed in"))]), context)
+        let (predictor, _) = makePredictor(FakeRunner(["driver": .failure(ModelError(message: "HTTP 401"))]), context)
         await predictor.refresh(context)
-        #expect(predictor.status == .failed("Not signed in"))
+        #expect(predictor.status == .failed("HTTP 401"))
         #expect(predictor.calls.last?.status == "failed")
         #expect(predictor.intentForOpen { _ in "shelf" }?.kind == .screenshot)
     }
@@ -100,13 +111,14 @@ import Testing
         #expect(refusing.intentForOpen { _ in "shelf" }?.kind == .text)
     }
 
-    /// Seam: recorded misses → reviewer → strategies file → next driver prompt.
-    /// Catches a reviewer that never fires, a strategies file that is not written, or a driver that never reads it.
-    @Test func missesPastTheThresholdRewriteWhatTheDriverReads() async throws {
-        let runner = FakeRunner(["driver": .success(#"{"kind":"text","hint":"any","confidence":0.5,"note":"n"}"#),
-                                 "reviewer": .success(#"{"strategies":"- In Xcode, open Snippets.","summary":"s"}"#)])
+    /// Seam: recorded misses → Codex reviewer → strategies file → both models' next requests.
+    /// Catches a reviewer that never fires, a strategies file that is not written, or a model that never reads it.
+    @Test func missesPastTheThresholdRewriteWhatBothModelsRead() async throws {
+        let jev = FakeRunner(["driver": .success(#"{"kind":"text","hint":"any","confidence":0.5,"note":"n"}"#)])
+        let codex = FakeRunner(["shadow": .success(#"{"kind":"text","hint":"any","confidence":0.5,"note":"n"}"#),
+                                "reviewer": .success(#"{"strategies":"- In Xcode, open Snippets.","summary":"s"}"#)])
         let context = context()
-        let (predictor, settings) = makePredictor(runner, context)
+        let (predictor, settings) = makePredictor(jev, context, codex: codex)
         settings.prediction.missThreshold = 2
         for _ in 0..<2 {
             #expect(predictor.intentForOpen { _ in "shelf" }?.kind == .text)
@@ -115,8 +127,9 @@ import Testing
         }
         for _ in 0..<200 where predictor.lastReview == nil { try await Task.sleep(for: .milliseconds(10)) }
         #expect(await predictor.memory.text("strategies.md")?.text == "- In Xcode, open Snippets.\n")
-        await predictor.refresh(context)
-        #expect(await runner.prompts["driver"]?.contains("- In Xcode, open Snippets.") == true)
+        await predictor.refresh(context)?.value
+        #expect(await jev.prompts["driver"]?.contains("- In Xcode, open Snippets.") == true)
+        #expect(await codex.prompts["shadow"]?.contains("- In Xcode, open Snippets.") == true)
         #expect(ReviewTrigger.isDue(misses: 1, since: .now - 12 * 3600, now: .now, threshold: 10, hours: 12))
     }
 
@@ -152,55 +165,59 @@ import Testing
             let stale = DriverThread(id: "t", model: "m", turns: turns, size: size, lastCall: .now)
             #expect(DriverThread.resumable(stale, model: model, maxTurns: 40, maxTokens: 30_000) == nil)
         }
-        // Settings saved before these knobs existed must keep the owner's choices, not reset to defaults.
-        let saved = try JSONDecoder().decode(PredictionConfig.self, from: Data(#"{"enabled":true,"useModel":false}"#.utf8))
-        #expect(!saved.useModel && saved.threadTurns == 40)
+        // Settings saved before these knobs existed, or while Luna drove, must keep the owner's choices.
+        let saved = try JSONDecoder().decode(PredictionConfig.self, from: Data(#"{"useModel":false,"driverModel":"gpt-x","driverEffort":"low"}"#.utf8))
+        #expect(!saved.useModel && saved.threadTurns == 40 && saved.lunaModel == "gpt-x" && saved.lunaEffort == "low" && saved.enabled)
     }
 
-    /// Seam: driver calls ↔ the kept Codex thread, across relaunches. Catches a thread re-sent the whole instruction,
+    /// Seam: Luna's shadow calls ↔ the kept Codex thread, across relaunches. Catches a thread re-sent the whole instruction,
     /// running totals logged as one turn's tokens, a thread id lost on relaunch, and a lost thread that never recovers.
-    @Test func driverResumesOneThreadAndStartsOverWhenItIsLost() async throws {
-        let runner = FakeRunner(["driver": .success(#"{"kind":"text","hint":"any","confidence":0.5,"note":"n"}"#)])
+    @Test func lunaResumesOneThreadAndStartsOverWhenItIsLost() async throws {
+        let codex = FakeRunner(["shadow": .success(#"{"kind":"text","hint":"any","confidence":0.5,"note":"n"}"#)])
+        let jev = FakeRunner(["driver": .success(#"{"kind":"text","hint":"any","confidence":0.5,"note":"n"}"#)])
         let context = context()
         let memory = DataStore(directory: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString))
         func launch() async -> SectionPredictor {
-            let predictor = makePredictor(runner, context, memory).0
+            let predictor = makePredictor(jev, context, memory, codex: codex).0
             await predictor.start()
-            await predictor.refresh(context)
+            await predictor.refresh(context)?.value
             return predictor
         }
         #expect(await launch().thread?.id == "t1")
-        #expect(await runner.prompts["driver"]?.contains("Kinds they can reach now") == true)
+        #expect(await codex.prompts["shadow"]?.contains("Kinds they can reach now") == true)
         let relaunched = await launch()
-        #expect(await runner.prompts["driver"]?.hasPrefix("## Since your last pick") == true)
-        #expect(relaunched.calls.last?.thread == "t1" && relaunched.calls.last?.turn == 2 && relaunched.calls.last?.tokens?.input == 10)
-        await runner.forget("t1")
+        let turn = relaunched.calls.last { $0.purpose == "shadow" }
+        #expect(await codex.prompts["shadow"]?.hasPrefix("## Since your last pick") == true)
+        #expect(turn?.thread == "t1" && turn?.turn == 2 && turn?.tokens?.input == 10)
+        await codex.forget("t1")
         #expect(await launch().thread == nil)
         #expect(await launch().thread?.id == "t2")
-        #expect(await runner.prompts["driver"]?.contains("Kinds they can reach now") == true)
+        #expect(await codex.prompts["shadow"]?.contains("Kinds they can reach now") == true)
     }
 
     private func context(screenshotAge: Int? = nil, kinds: [IntentKind] = IntentKind.allCases) -> PredictionContext {
         PredictionContext(hour: 10, weekday: "Thu", app: "com.apple.dt.Xcode", screenshotAge: screenshotAge, kinds: kinds)
     }
 
-    private func makePredictor(_ runner: FakeRunner, _ context: PredictionContext,
+    /// Without a Codex runner given, Codex is "not found", so Luna stays quiet.
+    private func makePredictor(_ jev: FakeRunner, _ context: PredictionContext,
                                _ memory: DataStore = DataStore(directory: FileManager.default.temporaryDirectory
-                                   .appendingPathComponent(UUID().uuidString)), shadow: FakeRunner? = nil) -> (SectionPredictor, AppSettings) {
+                                   .appendingPathComponent(UUID().uuidString)), codex: FakeRunner = FakeRunner([:], path: nil)) -> (SectionPredictor, AppSettings) {
         let settings = AppSettings(defaults: UserDefaults(suiteName: UUID().uuidString)!)
-        return (SectionPredictor(settings: settings, memory: memory, runner: runner, shadow: shadow) { context }, settings)
+        return (SectionPredictor(settings: settings, memory: memory, driver: jev, codex: codex) { context }, settings)
     }
 }
 
 private actor FakeRunner: ModelRunner {
     let replies: [String: Result<String, ModelError>]
+    let path: String?
     var prompts: [String: String] = [:]
     /// Kept threads and their turn counts, like Codex's stored sessions.
     var threads: [String: Int] = [:], made = 0
 
-    init(_ replies: [String: Result<String, ModelError>]) { self.replies = replies }
+    init(_ replies: [String: Result<String, ModelError>], path: String? = "/fake/codex") { self.replies = replies; self.path = path }
 
-    func codexPath() async -> String? { "/fake/codex" }
+    func codexPath() async -> String? { path }
     func run(_ call: ModelCall) async throws -> ModelReply {
         prompts[call.purpose] = call.prompt
         var id: String?

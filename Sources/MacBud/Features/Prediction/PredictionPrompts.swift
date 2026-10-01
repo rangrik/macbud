@@ -14,7 +14,8 @@ nonisolated enum PredictionPrompts {
         + "older = an earlier one they will look for; any = no guess. "
         + "For app you may instead name one app from runningApps by bundle id."
 
-    static func driver(context: PredictionContext, strategies: String, recent: [SessionRecord]) -> String {
+    /// Luna's first turn on a thread; later turns get `delta`.
+    static func luna(context: PredictionContext, strategies: String, recent: [SessionRecord]) -> String {
         """
         You predict what the owner of MacBud, a Mac notch utility, wants to reach when they press its open key.
         Kinds they can reach now:
@@ -36,7 +37,7 @@ nonisolated enum PredictionPrompts {
         """
     }
 
-    /// A later turn in the driver's thread: only what happened after `last`.
+    /// A later turn in Luna's thread: only what happened after `last`.
     static func delta(context: PredictionContext, since last: Date, sessions: [SessionRecord], events: [EventRecord],
                       strategies: String, written: Date?) -> String {
         let news = sessions.filter { $0.hit != nil && $0.t + ($0.secs ?? 0) > last }.map(line) + added(events, since: last)
@@ -82,7 +83,7 @@ nonisolated enum PredictionPrompts {
         ## Current strategies
         \(strategies.isEmpty ? "None yet." : strategies)
 
-        ## Hit rates, last 7 days
+        ## Hit rates
         \(rates)
 
         ## Misses since the last review
@@ -148,7 +149,7 @@ nonisolated enum PredictionPrompts {
         return String(decoding: data, as: UTF8.self)
     }
 
-    static func driverSchema(_ kinds: [IntentKind]) -> String {
+    static func lunaSchema(_ kinds: [IntentKind]) -> String {
         schema(["kind": ["type": "string", "enum": kinds.map(\.rawValue)], "app": ["type": "string"],
                 "hint": ["type": "string", "enum": ItemHint.allCases.map(\.rawValue)],
                 "confidence": ["type": "number"], "note": ["type": "string"]])
@@ -161,7 +162,7 @@ nonisolated enum PredictionPrompts {
     private static func line(_ s: SessionRecord) -> String {
         let time = s.t.formatted(.dateTime.weekday(.abbreviated).hour(.twoDigits(amPM: .omitted)).minute())
         let used = s.outcome.map { $0.kind.rawValue + ($0.app.map { " \($0)" } ?? "") + ($0.newest.map { $0 ? " (newest)" : " (older)" } ?? "") } ?? "nothing"
-        return "\(time) · app \(s.context.app ?? "-") · predicted \(describe(s.landed)) by \(s.source == "model" ? "you" : "the fallback rule")"
+        return "\(time) · app \(s.context.app ?? "-") · predicted \(describe(s.landed)) by \(s.source == "model" ? s.model?.model ?? "the model" : "the fallback rule")"
             + " · rule said \(s.heuristic.map(describe) ?? "-") · used \(used) · \(s.hit.map { $0 ? "hit" : "miss" } ?? "unscored")"
     }
 
@@ -179,7 +180,7 @@ nonisolated enum PredictionPrompts {
     }
 }
 
-/// What the driver answers.
+/// What either model answers; Jev's typed answers are normalized into this shape.
 nonisolated struct DriverReply: Decodable, Sendable {
     var kind: IntentKind
     var hint: ItemHint

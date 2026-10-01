@@ -156,19 +156,25 @@ final class AppSettings {
 /// Predicted landing. Stored as one value so new knobs do not each need a key.
 nonisolated struct PredictionConfig: Codable, Equatable, Sendable {
     var enabled = true
-    /// The kill switch for Codex; off means heuristics only.
+    /// The kill switch for every model call, Jev's and Codex's; off means heuristics only.
     var useModel = true
-    var driverModel = "gpt-6-luna"
-    var driverEffort = "medium"
+    /// Luna in the shadow. Saved under the old driver keys, so a choice made while Luna drove carries over.
+    var lunaModel = "gpt-6-luna"
+    var lunaEffort = "medium"
     var reviewerModel = "gpt-6-sol"
     var reviewerEffort = "high"
     var missThreshold = 10
     var reviewHours = 12
     var dailyCallCap = 100
-    /// The driver starts a new Codex thread after this many turns, or once a turn's input reaches this many tokens.
+    /// Luna starts a new Codex thread after this many turns, or once a turn's input reaches this many tokens.
     var threadTurns = 40
     var threadTokens = 30_000
     static let efforts = ["low", "medium", "high", "xhigh"]
+
+    enum CodingKeys: String, CodingKey {
+        case enabled, useModel, lunaModel = "driverModel", lunaEffort = "driverEffort", reviewerModel, reviewerEffort
+        case missThreshold, reviewHours, dailyCallCap, threadTurns, threadTokens
+    }
 
     init() {}
 
@@ -176,8 +182,8 @@ nonisolated struct PredictionConfig: Codable, Equatable, Sendable {
     init(from decoder: any Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         func read<T: Decodable>(_ key: CodingKeys, _ value: inout T) throws { value = try c.decodeIfPresent(T.self, forKey: key) ?? value }
-        try read(.enabled, &enabled); try read(.useModel, &useModel); try read(.driverModel, &driverModel)
-        try read(.driverEffort, &driverEffort); try read(.reviewerModel, &reviewerModel); try read(.reviewerEffort, &reviewerEffort)
+        try read(.enabled, &enabled); try read(.useModel, &useModel); try read(.lunaModel, &lunaModel)
+        try read(.lunaEffort, &lunaEffort); try read(.reviewerModel, &reviewerModel); try read(.reviewerEffort, &reviewerEffort)
         try read(.missThreshold, &missThreshold); try read(.reviewHours, &reviewHours); try read(.dailyCallCap, &dailyCallCap)
         try read(.threadTurns, &threadTurns); try read(.threadTokens, &threadTokens)
     }
