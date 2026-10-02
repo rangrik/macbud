@@ -126,25 +126,29 @@ import Testing
                                 driver: jev as (any ModelRunner)? ?? JevRunner(), codex: FakeRunner([:], path: nil))
     }
 
-    /// Seam: a plain open waiting on Jev → the notch. Catches a current pick that still waits, a second toggle that does not
-    /// call off the waiting open, and a late reply that opens the notch or records a session anyway.
+    /// Seam: a plain open waiting on Jev → the notch. Catches a second toggle or a close that does not call off the
+    /// waiting open, a late reply that opens the notch or records a session anyway, and that reply not filling the cache.
     @Test func aWaitingOpenCanBeCalledOff() async throws {
-        let jev = FakeRunner(["driver": .success(#"{"kind":"text","hint":"any","confidence":0.9,"note":"n"}"#)])
-        let coordinator = makeCoordinator(jev: jev)
-        defer { coordinator.notch.close() }
-        await coordinator.predictor.refresh(coordinator.predictor.context())
-        coordinator.openShelf()
-        #expect(coordinator.state.isShelf && !coordinator.isOpening, "a current pick lands at once")
-        coordinator.notch.close()
-        await jev.hold()
-        coordinator.clipboardStore.add(clip("new", 0))
-        coordinator.toggle()
-        #expect(coordinator.isOpening && !coordinator.state.isOpen)
-        coordinator.toggle()
-        await jev.release()
-        try await Task.sleep(for: PanelCoordinator.modelWait + .milliseconds(50))
-        coordinator.predictor.sessionEnded()
-        #expect(!coordinator.state.isOpen && !coordinator.isOpening && coordinator.predictor.sessions.count == 1)
+        let callOffs: [(PanelCoordinator) -> Void] = [{ $0.toggle() }, { $0.notch.close() }]
+        for callOff in callOffs {
+            let jev = FakeRunner(["driver": .success(#"{"kind":"text","hint":"any","confidence":0.9,"note":"n"}"#)])
+            let coordinator = makeCoordinator(jev: jev)
+            defer { coordinator.notch.close() }
+            coordinator.clipboardStore.add(clip("new", 0))
+            await coordinator.predictor.checkDriver()
+            await jev.hold()
+            coordinator.toggle()
+            #expect(coordinator.isOpening && !coordinator.state.isOpen)
+            callOff(coordinator)
+            await jev.release()
+            try await Task.sleep(for: PanelCoordinator.modelWait + .milliseconds(50))
+            coordinator.predictor.sessionEnded()
+            #expect(!coordinator.state.isOpen && !coordinator.isOpening && coordinator.predictor.sessions.isEmpty)
+            coordinator.openShelf()
+            #expect(coordinator.state.isShelf && !coordinator.isOpening, "the late reply is cached, so this open lands at once")
+            coordinator.predictor.sessionEnded()
+            #expect(coordinator.predictor.sessions.map(\.source) == ["model"])
+        }
     }
 
     private func clip(_ text: String, _ age: TimeInterval, kind: ClipboardItem.Kind = .text,

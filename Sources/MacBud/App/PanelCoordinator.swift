@@ -35,8 +35,8 @@ final class PanelCoordinator {
     @ObservationIgnored private var peekStarted: ContinuousClock.Instant?
     /// Whether this open has read the windows All searches.
     @ObservationIgnored private var appsLoaded = false
-    /// A plain open waiting on Jev, and whether it asked for the keyboard.
-    @ObservationIgnored private var pendingOpen: (task: Task<Void, Never>, focus: Bool)?
+    /// A plain open waiting on Jev, whether it asked for the keyboard, and whether a tab hover made it.
+    @ObservationIgnored private var pendingOpen: (task: Task<Void, Never>, focus: Bool, hover: Bool)?
     static let peekHold: Duration = .milliseconds(350)
     /// The most a plain open waits for Jev; shorter than a peek, so a quick tap still opens.
     static let modelWait: Duration = .milliseconds(300)
@@ -84,6 +84,8 @@ final class PanelCoordinator {
         }
         notch.onTabClick = { [weak self] screen in self?.openShelf(on: screen) }
         notch.onHoverOpen = { [weak self] screen in self?.openShelf(on: screen, focus: false) }
+        notch.onCloseRequest = { [weak self] in self?.cancelPendingOpen() }
+        notch.onHoverLeft = { [weak self] in if self?.pendingOpen?.hover == true { self?.cancelPendingOpen() } }
     }
 
     var showsWelcome: Bool { !settings.hasSeenWelcome }
@@ -142,11 +144,11 @@ final class PanelCoordinator {
             guard let self, !Task.isCancelled else { return }
             pendingOpen = nil
             Trace.log("plain open waited for Jev \(ContinuousClock.now - started)")
-            // Something else opened meanwhile, or a hover has left its notch: this open is no longer wanted.
+            // Something else opened meanwhile, or a hover left so fast its exit event was skipped.
             guard !state.isOpen, focus || screen.map({ NSMouseInRect(NSEvent.mouseLocation, $0.window.frame, false) }) ?? true else { return }
             landShelf(context, on: target, focus: focus)
         }
-        pendingOpen = (task, focus)
+        pendingOpen = (task, focus, !focus && screen != nil)
     }
 
     var isOpening: Bool { pendingOpen != nil }
