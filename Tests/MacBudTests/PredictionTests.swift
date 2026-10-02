@@ -52,7 +52,7 @@ import Testing
         let context = context()
         let jev = FakeRunner(["driver": .success(reply.text)])
         let (failing, _) = makePredictor(jev, context, codex: FakeRunner(["shadow": .failure(ModelError(message: "Model not supported"))]))
-        await failing.refresh(context)?.value
+        await failing.refresh(context, onOpen: true)?.value
         #expect(failing.status == .ready && failing.calls.last { $0.purpose == "shadow" }?.status == "failed")
 
         let pick = #"{"intent":{"kind":"%@","hint":"any","confidence":0.8},"note":"n","key":"k","madeAt":"2026-09-30T09:59:00Z"}"#
@@ -66,12 +66,15 @@ import Testing
         await scored.start()
         await scored.activity.record(ActivityEvent(t: .now, app: "com.apple.dt.Xcode", title: "Plan.swift", url: "github.com/rangrik/macbud"))
         let now = scored.context()
-        await scored.refresh(now)?.value
+        await luna.hold()
+        let shadow = await scored.refresh(now, onOpen: true)
+        #expect(scored.intentForOpen(now) { _ in "shelf" }?.kind == .snippet)
+        await luna.release()
+        await shadow?.value
         let sent = "just now: com.apple.dt.Xcode, “Plan.swift”, github.com/rangrik/macbud"
         #expect(now.activity == sent && scored.calls.count == 2 && scored.calls.allSatisfy { $0.activity == sent })
         #expect(await jev.prompts["driver"]?.contains(sent) == true)
         #expect(await luna.prompts["shadow"]?.contains(sent) == true)
-        #expect(scored.intentForOpen { _ in "shelf" }?.kind == .snippet)
         scored.noteAction("copy", outcome: Outcome(kind: .text), in: "shelf")
         scored.sessionEnded()
         let session = try #require(scored.sessions.last)
@@ -102,7 +105,7 @@ import Testing
     }
 
     /// Seam: an Accessibility read → the recorded event. Catches reading while locked, idle or untrusted,
-    /// a secure field's window being read, and file paths or query strings kept as web addresses.
+    /// a secure field's window being read, and file paths, user-info, queries or fragments kept as web addresses.
     @Test func activityRecordsOnlyWhatIsAllowed() {
         for (trusted, locked, idle) in [(false, false, 0.0), (true, true, 0), (true, false, 300)] {
             #expect(ActivityProbe.gate(trusted: trusted, locked: locked, idle: idle) { Issue.record("read while blocked"); return nil } == nil)
@@ -113,7 +116,7 @@ import Testing
         }
         #expect(secure == ActivityEvent(t: secure.t, app: "com.apple.Safari", role: "secure field"))
         let page = ActivityEvent.read(t: .now, app: "com.apple.Safari", role: "AXTextArea", subrole: nil) {
-            ("Pull requests", URL(string: "https://github.com/rangrik/macbud/pulls?token=abc#top"))
+            ("Pull requests", URL(string: "https://owner:secret@github.com/rangrik/macbud/pulls?token=abc#top"))
         }
         #expect(page.title == "Pull requests" && page.url == "github.com/rangrik/macbud/pulls" && page.role == "text area")
         for raw in ["file:///Users/owner/Private/Plan.pdf", "not a url", 42] as [Any] { #expect(ActivityEvent.webAddress(raw) == nil) }
@@ -140,34 +143,49 @@ import Testing
         #expect(log.changedAt == now)
     }
 
-    /// Seam: activity changes and opens → when Jev is asked. Catches a refresh before 10 quiet seconds, a role-only change
-    /// or a current pick asking again, a same-host page change not asking, an open waiting past its budget or the cap,
-    /// and a late reply changing an open that already landed.
-    @Test func jevIsAskedWhenTheMomentChangesOrAnOpenNeedsIt() async throws {
+    /// Seam: activity changes → background warming. Catches warming before 10 quiet seconds, more than once in 10 minutes,
+    /// on a role-only change or with a current pick, a same-host page change not counting, Luna asked for warming,
+    /// and an open asking inside the 20 s pause after a success.
+    @Test func jevWarmsAtMostEveryTenMinutesWithoutLuna() async {
         let jev = FakeRunner(["driver": .success(#"{"kind":"snippet","hint":"any","confidence":0.9,"note":"n"}"#)])
-        let (predictor, settings) = makePredictor(jev, context())
-        await predictor.start()
+        let (predictor, _) = makePredictor(jev, context(), codex: FakeRunner(["shadow": .success(#"{"kind":"text","hint":"any","confidence":0.5,"note":"n"}"#)]))
         let t = Date.now
         await predictor.activity.record(ActivityEvent(t: t, app: "com.apple.dt.Xcode", title: "Plan", url: "github.com/a"))
         let now = predictor.context()
-        #expect(!predictor.wantsRefresh(now, at: t + 9) && predictor.wantsRefresh(now, at: t + 10))
-        await jev.hold()
+        #expect(!predictor.wantsWarming(now, at: t + 9) && predictor.wantsWarming(now, at: t + 10))
+        #expect(await predictor.refresh(now) == nil && predictor.calls.map(\.purpose) == ["driver"], "warming never asks Luna")
+        #expect(!predictor.wantsWarming(now, at: t + 700), "a current pick needs no warming")
+        await predictor.activity.record(ActivityEvent(t: t + 20, app: "com.apple.dt.Xcode", title: "Plan", url: "github.com/a", role: "text field"))
+        #expect(!predictor.wantsWarming(predictor.context(), at: t + 700), "a role-only change is not worth a call")
+        await predictor.activity.record(ActivityEvent(t: t + 30, app: "com.apple.dt.Xcode", title: "Plan", url: "github.com/b"))
+        let moved = predictor.context()
+        #expect(moved.key == now.key && !predictor.wantsWarming(moved, at: t + 40) && predictor.wantsWarming(moved, at: t + 610))
+        #expect(!predictor.wantsCallBeforeOpen(moved), "opens wait out the 20 s pause too")
+    }
+
+    /// Seam: an open with no current pick → Jev within the budget, Luna on that open. Catches an open asking past the cap,
+    /// waiting past its budget, a late Jev reply changing an open that landed, and Luna's answer missing the open it was for.
+    @Test func anOpenWaitsBrieflyAndLunaAnswersThatOpen() async throws {
+        let jev = FakeRunner(["driver": .success(#"{"kind":"snippet","hint":"any","confidence":0.9,"note":"n"}"#)])
+        let luna = FakeRunner(["shadow": .success(#"{"kind":"text","hint":"any","confidence":0.5,"note":"n"}"#)])
+        let (predictor, settings) = makePredictor(jev, context(), codex: luna)
+        await predictor.checkDriver()
+        let now = predictor.context()
+        settings.prediction.dailyCallCap = 0
+        #expect(!predictor.wantsCallBeforeOpen(now))
+        settings.prediction.dailyCallCap = 100
         #expect(predictor.wantsCallBeforeOpen(now))
+        await jev.hold()
+        await luna.hold()
         await predictor.callBeforeOpen(now, budget: .milliseconds(50))
         #expect(predictor.intentForOpen(now) { _ in "shelf" }?.kind == .text, "Jev missed the budget, so the rules land")
         await jev.release()
-        for _ in 0..<200 where predictor.status != .ready { try await Task.sleep(for: .milliseconds(5)) }
+        await luna.release()
+        for _ in 0..<200 where predictor.open?.shadow == nil { try await Task.sleep(for: .milliseconds(5)) }
         predictor.noteAction("copy", outcome: Outcome(kind: .snippet), in: "shelf")
         predictor.sessionEnded()
-        #expect(predictor.sessions.last?.landed.kind == .text && predictor.sessions.last?.source == "heuristic")
-        #expect(!predictor.wantsCallBeforeOpen(now) && !predictor.wantsRefresh(now, at: t + 60))
-        await predictor.activity.record(ActivityEvent(t: t + 20, app: "com.apple.dt.Xcode", title: "Plan", url: "github.com/a", role: "text field"))
-        #expect(!predictor.wantsRefresh(predictor.context(), at: t + 60))
-        await predictor.activity.record(ActivityEvent(t: t + 30, app: "com.apple.dt.Xcode", title: "Plan", url: "github.com/b"))
-        let moved = predictor.context()
-        #expect(moved.key == now.key && predictor.wantsRefresh(moved, at: t + 40) && predictor.wantsCallBeforeOpen(moved))
-        settings.prediction.dailyCallCap = 1
-        #expect(!predictor.wantsCallBeforeOpen(moved))
+        let session = try #require(predictor.sessions.last)
+        #expect(session.landed.kind == .text && session.source == "heuristic" && session.shadow?.model == "gpt-6-luna" && session.shadowHit == false)
     }
 
     /// Seam: runner failure → open path. Catches a broken CLI leaving the open without the rules' pick.
@@ -220,7 +238,7 @@ import Testing
         }
         for _ in 0..<200 where predictor.lastReview == nil { try await Task.sleep(for: .milliseconds(10)) }
         #expect(await predictor.memory.text("strategies.md")?.text == "- In Xcode, open Snippets.\n")
-        await predictor.refresh(context)?.value
+        await predictor.refresh(context, onOpen: true)?.value
         #expect(await jev.prompts["driver"]?.contains("- In Xcode, open Snippets.") == true)
         #expect(await codex.prompts["shadow"]?.contains("- In Xcode, open Snippets.") == true)
         #expect(ReviewTrigger.isDue(misses: 1, since: .now - 12 * 3600, now: .now, threshold: 10, hours: 12))
@@ -273,7 +291,7 @@ import Testing
         func launch() async -> SectionPredictor {
             let predictor = makePredictor(jev, context, memory, codex: codex).0
             await predictor.start()
-            await predictor.refresh(context)?.value
+            await predictor.refresh(context, onOpen: true)?.value
             return predictor
         }
         #expect(await launch().thread?.id == "t1")
