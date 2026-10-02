@@ -86,12 +86,18 @@ import Testing
         #expect(scored.callsToday == 1, "shadow calls stay outside the cap")
     }
 
-    /// Seam: Jev's `which_app` answer → the cached pick's app. Catches the question missing the running apps, a confident
-    /// running app lost, and a low-confidence, `none` or not-running answer naming an app.
+    /// Seam: running apps → Jev's `which_app` question and answer → the cached pick's app. Catches two copies of one app
+    /// crashing the request or taking two of the eight slots, a confident running app lost, and a low-confidence, `none`
+    /// or not-running answer naming an app.
     @Test func jevNamesAnAppOnlyWhenConfidentAndRunning() async throws {
+        let apps = (1...9).map { "com.example.App\($0)" }
+        let captured = PredictionContext.capture(clipboard: [], media: [], dictations: [], app: apps[0], running: [apps[0], apps[0]] + apps,
+                                                 kinds: IntentKind.allCases)
+        #expect(captured.runningApps == Array(apps.prefix(8)) && captured.previousApp == apps[1])
         let running = ["com.tinyspeck.slackmacgap", "com.apple.Safari"]
-        let context = PredictionContext(hour: 10, weekday: "Thu", app: "com.apple.Safari", previousApp: running[0], runningApps: running,
-                                        kinds: IntentKind.allCases)
+        // Hand-built with a duplicate, as a context from elsewhere could be; the request must still build.
+        let context = PredictionContext(hour: 10, weekday: "Thu", app: "com.apple.Safari", previousApp: running[0],
+                                        runningApps: running + [running[0]], kinds: IntentKind.allCases)
         let body = PredictionPrompts.jev(context: context, strategies: "", recent: [], model: "jev-latest")
         #expect(body.contains(#""which_app""#) && body.contains(#""com.tinyspeck.slackmacgap":"slackmacgap, running now""#))
         let cases: [(String, Double, String?)] = [(running[0], 0.7, running[0]), (running[0], 0.4, nil), ("none", 0.9, nil), ("com.not.Running", 0.9, nil)]

@@ -34,7 +34,9 @@ nonisolated struct PredictionContext: Codable, Equatable, Sendable {
         let dictated = dictations.map(\.createdAt).max()
         func age(_ date: Date?) -> Int? { date.map { max(0, Int(now.timeIntervalSince($0))) } }
         let calendar = Calendar.current
-        let running = kinds.contains(.app) ? running : []
+        // Two copies of one app share a bundle id; keep the frontmost, so eight slots mean eight apps.
+        var seen = Set<String>()
+        let running = kinds.contains(.app) ? running.filter { seen.insert($0).inserted } : []
         return PredictionContext(hour: calendar.component(.hour, from: now),
                                  weekday: calendar.shortWeekdaySymbols[calendar.component(.weekday, from: now) - 1],
                                  app: app, previousApp: running.first { $0 != app },

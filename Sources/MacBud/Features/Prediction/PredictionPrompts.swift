@@ -148,7 +148,7 @@ nonisolated enum PredictionPrompts {
         if let running = context.runningApps, !running.isEmpty {
             questions["which_app"] = ["type": "choice",
                                       "instructions": "If they are reaching for an app, which running app? `none` unless something here points to one.",
-                                      "criteria": Dictionary(uniqueKeysWithValues: running.prefix(8).map { ($0, short($0) + ", running now") })
+                                      "criteria": Dictionary(running.prefix(8).map { ($0, short($0) + ", running now") }) { a, _ in a }
                                           .merging(["none": "no app in particular"]) { a, _ in a }]
         }
         let body: [String: Any] = ["model": model, "state": state, "questions": questions]
