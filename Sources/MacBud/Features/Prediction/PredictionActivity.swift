@@ -121,7 +121,7 @@ nonisolated enum PredictionActivity {
         }
         guard let c = entry.call else {
             if entry.kind == .capReached {
-                out.append(ActivityDetail(title: "What happened", text: "MacBud stops asking Jev and the reviewer for the day at this cap, set in Settings → Prediction. Luna is asked only with Jev."))
+                out.append(ActivityDetail(title: "What happened", text: "MacBud stops asking Jev and the reviewer for the day at this cap, set in Settings → Prediction. Luna is asked only with an open's Jev call."))
             }
             return out
         }
@@ -221,7 +221,8 @@ nonisolated enum PredictionActivity {
 
     private static func pretty(_ json: Data?) -> String {
         guard let json, let object = try? JSONSerialization.jsonObject(with: json),
-              let data = try? JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys]) else { return "Not recorded." }
+              let data = try? JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
+        else { return "Not recorded." }
         return String(decoding: data, as: UTF8.self)
     }
 }

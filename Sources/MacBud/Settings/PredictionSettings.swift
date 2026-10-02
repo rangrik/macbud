@@ -39,7 +39,8 @@ struct PredictionSettings: View {
                 Stepper("Review after \(settings.prediction.missThreshold) misses", value: $settings.prediction.missThreshold, in: 1...50)
                 Stepper("Or every \(settings.prediction.reviewHours) hours when a miss is waiting", value: $settings.prediction.reviewHours, in: 1...48)
                 Stepper("At most \(settings.prediction.dailyCallCap) Jev and reviewer calls a day", value: $settings.prediction.dailyCallCap, in: 10...300, step: 10)
-                Text("Luna is asked only when Jev is, so the cap bounds Luna too.").font(.caption).foregroundStyle(.secondary)
+                Text("Jev warms up at most every 10 minutes when what you are doing changes, and is asked when an open has no current pick. Luna is asked only with an open's Jev call, outside the cap.")
+                    .font(.caption).foregroundStyle(.secondary)
                 Stepper("New Luna thread after \(settings.prediction.threadTurns) calls", value: $settings.prediction.threadTurns, in: 5...200, step: 5)
                 Stepper("Or once a call sends \(settings.prediction.threadTokens / 1000)k tokens", value: $settings.prediction.threadTokens,
                         in: 10_000...100_000, step: 5_000)
@@ -50,9 +51,7 @@ struct PredictionSettings: View {
                 }
             }
             SwiftUI.Section {
-                let jev = predictor.rates.jev
-                Text("Each period counts only its own opens, so old results never count as Jev's. Different weeks are not a fair test: a gap between periods does not show the swap helped. Within a period, on the opens Jev answered the rules would have hit \(jev.rulesWhereModel.text); on the opens Luna answered the landing hit \(jev.landedWhereShadow.text).")
-                    .font(.caption).foregroundStyle(.secondary)
+                Text(caveat).font(.caption).foregroundStyle(.secondary)
                 LabeledContent("Misses waiting for review", value: "\(predictor.unreviewedMisses.count)")
                 let usage = PredictionActivity.usageToday(predictor.calls)
                 if usage.isEmpty { LabeledContent("Today", value: "No calls") }
@@ -80,6 +79,15 @@ struct PredictionSettings: View {
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             accessibilityTrusted = Paster.isAccessibilityTrusted
         }
+    }
+
+    /// Comparisons on the same opens appear only once there are such opens.
+    private var caveat: String {
+        let jev = predictor.rates.jev
+        var text = "Each period counts only its own opens, so old results never count as Jev's. Different weeks are not a fair test: a gap between periods does not show the swap helped. Luna answers only the opens that asked Jev, so it has fewer samples."
+        if jev.rulesWhereModel.total > 0 { text += " On the opens Jev answered, the rules would have hit \(jev.rulesWhereModel.text)." }
+        if jev.landedWhereShadow.total > 0 { text += " On the opens Luna answered, the landing hit \(jev.landedWhereShadow.text)." }
+        return text
     }
 
     private var activity: some View {

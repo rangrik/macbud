@@ -89,6 +89,24 @@ struct PredictionActivityView: View {
 
     private func header(_ shown: [ActivityEntry]) -> some View {
         VStack(alignment: .leading, spacing: 10) {
+            // Actions get their own row, so the numbers below can never squeeze them.
+            HStack(spacing: 6) {
+                if predictor.isBusy {
+                    ProgressView().controlSize(.small)
+                    Text("The reviewer is running…").font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer()
+                HStack {
+                    Button("Review now") { Task { await predictor.review() } }
+                        .disabled(predictor.isBusy || !settings.prediction.useModel || predictor.sessions.isEmpty)
+                    Button("Open memory folder") {
+                        try? FileManager.default.createDirectory(at: predictor.memory.directory, withIntermediateDirectories: true)
+                        NSWorkspace.shared.open(predictor.memory.directory)
+                    }
+                    Button("Export…") { export(shown) }.disabled(shown.isEmpty)
+                }
+                .fixedSize()
+            }
             HStack(alignment: .top, spacing: 28) {
                 VStack(alignment: .leading, spacing: 3) {
                     Text("Today").font(.caption.bold()).foregroundStyle(.secondary)
@@ -102,22 +120,7 @@ struct PredictionActivityView: View {
                         ForEach(cohort.rows, id: \.label) { Text("\($0.label) \($0.rate.text)") }
                     }
                 }
-                Spacer()
-                VStack(alignment: .trailing, spacing: 6) {
-                    HStack {
-                        Button("Review now") { Task { await predictor.review() } }
-                            .disabled(predictor.isBusy || !settings.prediction.useModel || predictor.sessions.isEmpty)
-                        Button("Open memory folder") {
-                            try? FileManager.default.createDirectory(at: predictor.memory.directory, withIntermediateDirectories: true)
-                            NSWorkspace.shared.open(predictor.memory.directory)
-                        }
-                        Button("Export…") { export(shown) }.disabled(shown.isEmpty)
-                    }
-                    if predictor.isBusy {
-                        HStack(spacing: 6) { ProgressView().controlSize(.small); Text("The reviewer is running…") }
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
-                }
+                Spacer(minLength: 0)
             }
             DisclosureGroup(isExpanded: $showsStrategies) {
                 Text(predictor.strategies.isEmpty ? "None yet. The reviewer writes these once misses build up." : predictor.strategies)
