@@ -55,7 +55,7 @@ struct PredictionActivityView: View {
             HStack {
                 Picker("Show", selection: $filter) { ForEach(ActivityFilter.allCases) { Text($0.rawValue).tag($0) } }
                     .pickerStyle(.segmented).labelsHidden().fixedSize()
-                TextField("Search summaries, prompts and replies", text: $query).textFieldStyle(.roundedBorder)
+                TextField("Search all text", text: $query).textFieldStyle(.roundedBorder)
             }
             .padding(12)
             Divider()
@@ -107,20 +107,24 @@ struct PredictionActivityView: View {
                 }
                 .fixedSize()
             }
-            HStack(alignment: .top, spacing: 28) {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("Today").font(.caption.bold()).foregroundStyle(.secondary)
-                    let usage = PredictionActivity.usageToday(predictor.calls)
-                    if usage.isEmpty { Text("No calls") }
-                    ForEach(usage, id: \.model) { Text("\($0.model): \($0.calls) calls · \($0.tokens) tokens (\($0.cached) cached)") }
-                }
+            let today = VStack(alignment: .leading, spacing: 3) {
+                Text("Today").font(.caption.bold()).foregroundStyle(.secondary)
+                let usage = PredictionActivity.usageToday(predictor.calls)
+                if usage.isEmpty { Text("No calls") }
+                ForEach(usage, id: \.model) { Text("\($0.model): \($0.calls) calls · \($0.tokens) tokens (\($0.cached) cached)") }
+            }.fixedSize()
+            let periods = HStack(alignment: .top, spacing: 28) {
                 ForEach(predictor.cohorts, id: \.title) { cohort in
                     VStack(alignment: .leading, spacing: 3) {
                         Text(cohort.title).font(.caption.bold()).foregroundStyle(.secondary)
                         ForEach(cohort.rows, id: \.label) { Text("\($0.label) \($0.rate.text)") }
-                    }
+                    }.fixedSize()
                 }
-                Spacer(minLength: 0)
+            }
+            // Side by side when there is room; otherwise the periods go under Today, so no figure wraps mid-phrase.
+            ViewThatFits(in: .horizontal) {
+                HStack(alignment: .top, spacing: 28) { today; periods; Spacer(minLength: 0) }
+                VStack(alignment: .leading, spacing: 10) { today; periods }
             }
             DisclosureGroup(isExpanded: $showsStrategies) {
                 Text(predictor.strategies.isEmpty ? "None yet. The reviewer writes these once misses build up." : predictor.strategies)
