@@ -249,6 +249,20 @@ import Testing
         #expect(await forgotten.memory.lines(SessionRecord.self, in: "predictions.jsonl").isEmpty)
     }
 
+    /// Seam: an open's own save ↔ a Luna score written in the same instant. Catches the score landing before the save and
+    /// the file keeping the unscored line, and the open saved twice.
+    @Test func aScoreThatBeatsItsOpensSaveStillLands() async throws {
+        let memory = DataStore(directory: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString))
+        let (predictor, _) = makePredictor(FakeRunner([:]), context(), memory)
+        _ = predictor.intentForOpen(predictor.context(), openID: "o1") { _ in "shelf" }
+        predictor.noteAction("copy", outcome: Outcome(kind: .text), in: "shelf")
+        predictor.sessionEnded()
+        // No suspension since sessionEnded, so its save task has not had a turn: the score's rewrite goes first.
+        await predictor.score(ModelPick(intent: LandingIntent(kind: .text), note: "n", key: "k", madeAt: .now, model: "gpt-6-luna"), for: "o1")
+        for _ in 0..<200 where await memory.lines(SessionRecord.self, in: "predictions.jsonl").isEmpty { try await Task.sleep(for: .milliseconds(5)) }
+        #expect(await memory.lines(SessionRecord.self, in: "predictions.jsonl").map(\.shadowHit) == [true])
+    }
+
     /// Seam: runner failure → open path. Catches a broken CLI leaving the open without the rules' pick.
     @Test func failingRunnerLeavesTheRulesInCharge() async {
         let context = context(screenshotAge: 10)

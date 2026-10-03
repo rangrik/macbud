@@ -193,7 +193,11 @@ final class SectionPredictor {
         sessions.append(record)
         if sessions.count > 500 { sessions.removeFirst(sessions.count - 500) }
         if jevSince == nil, record.driver == Self.jevModel { jevSince = record.t }
-        Task { await memory.appendLine(record, to: "predictions.jsonl") }
+        // Saved as it stands when this task runs: a Luna score that got in first is kept, and a Reset in between saves nothing.
+        Task {
+            guard let saved = sessions.last(where: { $0.id == record.id }) else { return }
+            await memory.appendLine(saved, to: "predictions.jsonl")
+        }
         Trace.log("predict session landed=\(PredictionPrompts.describe(record.landed)) used=\(record.outcome.map { "\($0.kind.rawValue) newest=\($0.newest.map { "\($0)" } ?? "-")" } ?? "-") hit=\(record.hit.map { "\($0)" } ?? "-")")
         if record.hit == false { reviewIfDue() }
     }
@@ -250,7 +254,7 @@ final class SectionPredictor {
 
     /// Luna's answer goes to the open it was asked for, still going or closed, never to another; a closed one is
     /// scored against its recorded use and rewritten in place, so it is not counted twice.
-    private func score(_ shadow: ModelPick, for openID: String) async {
+    func score(_ shadow: ModelPick, for openID: String) async {
         if open?.openID == openID { open?.shadow = shadow; return }
         guard let index = sessions.lastIndex(where: { $0.openID == openID }) else { return }
         sessions[index].shadow = shadow
