@@ -45,17 +45,19 @@ import Testing
         #expect(PredictionActivity.details(open1).first { $0.link != nil }?.link == jev.id)
     }
 
-    /// Seam: records → their details. Catches an activity line recomputed, dropped or shown with escaped slashes, an old call
+    /// Seam: records → their details. Catches an activity line recomputed, dropped or shown with escaped slashes, Luna's note
+    /// labelled as the driver's, an old call
     /// claiming activity, and an open from before the swap relabelled as Jev driving with Luna in the shadow.
     @Test func detailsShowTheActivitySentAndKeepOldLabels() {
         let sent = CallRecord(t: .now, purpose: "shadow", model: "gpt-6-luna", effort: "medium",
-                              prompt: #"{"activity":"just now: com.apple.Safari, “Docs”, github.com/a"}"#, reply: "{}",
+                              prompt: #"{"activity":"just now: com.apple.Safari, “Docs”, github.com/a"}"#, reply: #"{"note":"n"}"#,
                               activity: "just now: com.apple.Safari, “Docs”, github.com/a")
         let old = CallRecord(t: .now - 60, purpose: "driver", model: "gpt-6-luna", effort: "medium", prompt: "p", reply: "{}")
         let rows = PredictionActivity.timeline(calls: [old, sent], sessions: [], cap: 100)
         let seen = rows.map { row in PredictionActivity.details(row).first { $0.title == "Activity the model saw" }?.text }
         #expect(seen == ["just now: com.apple.Safari, “Docs”, github.com/a", "Not recorded for this call."] && rows[0].summary.hasPrefix("Shadow gpt-6-luna said"))
         #expect(PredictionActivity.details(rows[0]).first { $0.title == "Context sent" }?.text.contains("“Docs”, github.com/a") == true)
+        #expect(PredictionActivity.details(rows[0]).map(\.title).contains("Shadow's note") && !PredictionActivity.details(rows[0]).map(\.title).contains("Driver's note"))
         let pick = ModelPick(intent: LandingIntent(kind: .text), note: "n", key: "k", madeAt: .now)
         var open = SessionRecord(t: .now, context: PredictionContext(hour: 10, weekday: "Thu", kinds: [.text]), model: pick,
                                  landed: pick.intent, source: "model", opened: "shelf", shadow: pick)

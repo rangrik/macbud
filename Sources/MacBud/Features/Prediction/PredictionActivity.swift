@@ -132,7 +132,7 @@ nonisolated enum PredictionActivity {
         }
         if let thread = c.thread { out.append(ActivityDetail(title: "Codex thread", text: "\(thread), turn \(c.turn ?? 1)")) }
         let reply = (try? JSONSerialization.jsonObject(with: Data((c.reply ?? "").utf8))) as? [String: Any] ?? [:]
-        if let note = reply["note"] as? String { out.append(ActivityDetail(title: "Driver's note", text: note)) }
+        if let note = reply["note"] as? String { out.append(ActivityDetail(title: c.purpose == "shadow" ? "Shadow's note" : "Driver's note", text: note)) }
         if c.purpose != "reviewer" {
             out.append(ActivityDetail(title: "Activity the model saw", text: c.activity ?? "Not recorded for this call."))
             let context = c.prompt.split(separator: "\n").last { $0.hasPrefix("{") }
