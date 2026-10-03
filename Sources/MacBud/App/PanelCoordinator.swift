@@ -135,18 +135,18 @@ final class PanelCoordinator {
             return
         }
         let context = settings.prediction.enabled ? predictor.context() : nil
-        guard let context, predictor.wantsCallBeforeOpen(context) else { landShelf(context, on: screen, focus: focus); return }
+        guard let context, predictor.wantsCallBeforeOpen(context) else { landShelf(context, openID: nil, on: screen, focus: focus); return }
         // The display and focus are the request's, decided now, not when Jev answers.
         let target = screen ?? notch.notchForOpen()
-        let started = ContinuousClock.now
+        let started = ContinuousClock.now, openID = UUID().uuidString
         let task = Task { [weak self] in
-            await self?.predictor.callBeforeOpen(context, budget: Self.modelWait)
+            await self?.predictor.callBeforeOpen(context, openID: openID, budget: Self.modelWait)
             guard let self, !Task.isCancelled else { return }
             pendingOpen = nil
             Trace.log("plain open waited for Jev \(ContinuousClock.now - started)")
             // Something else opened meanwhile, or a hover left so fast its exit event was skipped.
             guard !state.isOpen, focus || screen.map({ NSMouseInRect(NSEvent.mouseLocation, $0.window.frame, false) }) ?? true else { return }
-            landShelf(context, on: target, focus: focus)
+            landShelf(context, openID: openID, on: target, focus: focus)
         }
         pendingOpen = (task, focus, !focus && screen != nil)
     }
@@ -158,7 +158,7 @@ final class PanelCoordinator {
         pendingOpen = nil
     }
 
-    private func landShelf(_ context: PredictionContext?, on screen: ScreenNotch?, focus: Bool) {
+    private func landShelf(_ context: PredictionContext?, openID: String?, on screen: ScreenNotch?, focus: Bool) {
         let started = ContinuousClock.now
         prepareToOpen()
         func landing(_ intent: LandingIntent?) -> Landing {
@@ -169,7 +169,7 @@ final class PanelCoordinator {
         }
         // Once only: naming an app reads every open window.
         var landed = landing(nil)
-        if let context { _ = predictor.intentForOpen(context) { landed = landing($0); return landed.place } }
+        if let context { _ = predictor.intentForOpen(context, openID: openID) { landed = landing($0); return landed.place } }
         state.chip = landed.chip
         state.metrics.shelfSize.height = NotchMetrics.shelfHeight(hasCards: !shelf.recents.isEmpty)
         notch.open(landed.expanded ? .expanded : .shelf, focus: focus, on: screen)

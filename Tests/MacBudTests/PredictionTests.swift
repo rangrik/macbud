@@ -52,7 +52,7 @@ import Testing
         let context = context()
         let jev = FakeRunner(["driver": .success(reply.text)])
         let (failing, _) = makePredictor(jev, context, codex: FakeRunner(["shadow": .failure(ModelError(message: "Model not supported"))]))
-        await failing.refresh(context, onOpen: true)?.value
+        await failing.refresh(context, for: "o0")?.value
         #expect(failing.status == .ready && failing.calls.last { $0.purpose == "shadow" }?.status == "failed")
 
         let pick = #"{"intent":{"kind":"%@","hint":"any","confidence":0.8},"note":"n","key":"k","madeAt":"2026-09-30T09:59:00Z"}"#
@@ -67,8 +67,8 @@ import Testing
         await scored.activity.record(ActivityEvent(t: .now, app: "com.apple.dt.Xcode", title: "Plan.swift", url: "github.com/rangrik/macbud"))
         let now = scored.context()
         await luna.hold()
-        let shadow = await scored.refresh(now, onOpen: true)
-        #expect(scored.intentForOpen(now) { _ in "shelf" }?.kind == .snippet)
+        let shadow = await scored.refresh(now, for: "o1")
+        #expect(scored.intentForOpen(now, openID: "o1") { _ in "shelf" }?.kind == .snippet)
         await luna.release()
         await shadow?.value
         let sent = "just now: com.apple.dt.Xcode, “Plan.swift”, github.com/rangrik/macbud"
@@ -191,8 +191,8 @@ import Testing
         #expect(predictor.wantsCallBeforeOpen(now))
         await jev.hold()
         await luna.hold()
-        await predictor.callBeforeOpen(now, budget: .milliseconds(50))
-        #expect(predictor.intentForOpen(now) { _ in "shelf" }?.kind == .text, "Jev missed the budget, so the rules land")
+        await predictor.callBeforeOpen(now, openID: "o1", budget: .milliseconds(50))
+        #expect(predictor.intentForOpen(now, openID: "o1") { _ in "shelf" }?.kind == .text, "Jev missed the budget, so the rules land")
         await jev.release()
         await luna.release()
         for _ in 0..<200 where predictor.open?.shadow == nil { try await Task.sleep(for: .milliseconds(5)) }
@@ -200,6 +200,53 @@ import Testing
         predictor.sessionEnded()
         let session = try #require(predictor.sessions.last)
         #expect(session.landed.kind == .text && session.source == "heuristic" && session.shadow?.model == "gpt-6-luna" && session.shadowHit == false)
+    }
+
+    /// Seam: Luna's late answer → the open it was asked for, in memory and on disk. Catches an answer lost after its open
+    /// closed, landing on a later open with the same context, scoring an open with no use, restoring a session after Reset,
+    /// counting the open twice after a reload, and pending calls that never clear or survive a relaunch.
+    @Test func lunaScoresItsOwnOpenEvenAfterItCloses() async throws {
+        let jev = FakeRunner(["driver": .success(#"{"kind":"snippet","hint":"any","confidence":0.9,"note":"n"}"#)])
+        let luna = FakeRunner(["shadow": .success(#"{"kind":"text","hint":"any","confidence":0.5,"note":"n"}"#)])
+        let memory = DataStore(directory: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString))
+        func open(_ predictor: SectionPredictor, _ id: String?, used: Outcome?) {
+            _ = predictor.intentForOpen(predictor.context(), openID: id) { _ in "shelf" }
+            if let used { predictor.noteAction("copy", outcome: used, in: "shelf") }
+            predictor.sessionEnded()
+        }
+        func askLuna(_ predictor: SectionPredictor, _ id: String) async throws -> Task<Void, Never>? {
+            await luna.hold()
+            let answer = await predictor.refresh(predictor.context(), for: id)
+            for _ in 0..<200 where predictor.pendingLuna.isEmpty { try await Task.sleep(for: .milliseconds(5)) }
+            #expect(predictor.pendingLuna == [id] && predictor.cohorts[0].rows.contains { $0 == ("Luna calls pending", "1") })
+            return answer
+        }
+        let (first, _) = makePredictor(jev, context(), memory, codex: luna)
+        let late = try await askLuna(first, "o1")
+        open(first, "o1", used: Outcome(kind: .text))
+        open(first, nil, used: Outcome(kind: .text))
+        await luna.release()
+        await late?.value
+        #expect(first.sessions.map(\.shadowHit) == [true, nil] && first.pendingLuna.isEmpty)
+        let reloaded = makePredictor(jev, context(), memory).0
+        await reloaded.start()
+        #expect(reloaded.sessions.map(\.shadowHit) == [true, nil] && reloaded.rates.jev.shadow.total == 1 && reloaded.pendingLuna.isEmpty)
+
+        let (unused, _) = makePredictor(jev, context(), codex: luna)
+        let noUse = try await askLuna(unused, "o2")
+        open(unused, "o2", used: nil)
+        await luna.release()
+        await noUse?.value
+        #expect(unused.sessions.first?.shadow != nil && unused.sessions.first?.shadowHit == nil && unused.rates.jev.shadow.total == 0)
+
+        let (forgotten, _) = makePredictor(jev, context(), codex: luna)
+        let afterReset = try await askLuna(forgotten, "o3")
+        open(forgotten, "o3", used: Outcome(kind: .text))
+        await forgotten.resetMemory()
+        await luna.release()
+        await afterReset?.value
+        #expect(forgotten.sessions.isEmpty && forgotten.pendingLuna.isEmpty && forgotten.cohorts[0].rows.contains { $0 == ("Luna calls pending", "0") })
+        #expect(await forgotten.memory.lines(SessionRecord.self, in: "predictions.jsonl").isEmpty)
     }
 
     /// Seam: runner failure → open path. Catches a broken CLI leaving the open without the rules' pick.
@@ -252,7 +299,7 @@ import Testing
         }
         for _ in 0..<200 where predictor.lastReview == nil { try await Task.sleep(for: .milliseconds(10)) }
         #expect(await predictor.memory.text("strategies.md")?.text == "- In Xcode, open Snippets.\n")
-        await predictor.refresh(context, onOpen: true)?.value
+        await predictor.refresh(context, for: "o1")?.value
         #expect(await jev.prompts["driver"]?.contains("- In Xcode, open Snippets.") == true)
         #expect(await codex.prompts["shadow"]?.contains("- In Xcode, open Snippets.") == true)
         #expect(ReviewTrigger.isDue(misses: 1, since: .now - 12 * 3600, now: .now, threshold: 10, hours: 12))
@@ -305,7 +352,7 @@ import Testing
         func launch() async -> SectionPredictor {
             let predictor = makePredictor(jev, context, memory, codex: codex).0
             await predictor.start()
-            await predictor.refresh(context, onOpen: true)?.value
+            await predictor.refresh(context, for: UUID().uuidString)?.value
             return predictor
         }
         #expect(await launch().thread?.id == "t1")

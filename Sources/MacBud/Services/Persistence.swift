@@ -101,6 +101,16 @@ actor DataStore {
         try? Data(kept.joined(separator: [0x0A]) + (kept.isEmpty ? [] : [0x0A])).write(to: url, options: .atomic)
     }
 
+    /// Replaces the last line `match` picks with `value`; the other lines keep their bytes.
+    func replaceLine<T: Codable & Sendable>(_ value: T, in name: String, where match: @Sendable (T) -> Bool) {
+        let url = directory.appendingPathComponent(name)
+        guard let data = try? Data(contentsOf: url), let line = try? Self.lineEncoder.encode(value) else { return }
+        var lines = data.split(separator: 0x0A).map { Data($0) }
+        guard let index = lines.lastIndex(where: { (try? Self.decoder.decode(T.self, from: $0)).map(match) ?? false }) else { return }
+        lines[index] = line
+        try? Data(lines.joined(separator: [0x0A]) + [0x0A]).write(to: url, options: .atomic)
+    }
+
     func text(_ name: String) -> (text: String, modified: Date?)? {
         let url = directory.appendingPathComponent(name)
         guard let text = try? String(contentsOf: url, encoding: .utf8) else { return nil }

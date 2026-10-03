@@ -49,6 +49,8 @@ final class SectionPredictor {
     private(set) var thread: DriverThread?
     /// The first open Jev drove, read from the whole predictions file.
     private(set) var jevSince: Date?
+    /// Opens whose Luna answer has not come back. Memory only: a relaunch drops them rather than guess.
+    private(set) var pendingLuna: Set<String> = []
     @ObservationIgnored private var events: [EventRecord] = []
     @ObservationIgnored private var cache: [String: ModelPick] = [:]
     @ObservationIgnored private var driverBusy = false
@@ -151,9 +153,9 @@ final class SectionPredictor {
     }
 
     /// Asks Jev before an open lands, waiting at most `budget`; a later reply fills the cache, never this open.
-    func callBeforeOpen(_ context: PredictionContext, budget: Duration) async {
+    func callBeforeOpen(_ context: PredictionContext, openID: String, budget: Duration) async {
         let wait = Task { try? await Task.sleep(for: budget) }
-        Task { await refresh(context, onOpen: true); wait.cancel() }
+        Task { await refresh(context, for: openID); wait.cancel() }
         await wait.value
     }
 
@@ -161,7 +163,7 @@ final class SectionPredictor {
 
     /// What a plain open should land on: Jev's fresh intent for this context, else the heuristic's.
     /// `opened` says where the UI put it, for the log.
-    func intentForOpen(_ context: PredictionContext? = nil, opened: (LandingIntent) -> String) -> LandingIntent? {
+    func intentForOpen(_ context: PredictionContext? = nil, openID: String? = nil, opened: (LandingIntent) -> String) -> LandingIntent? {
         let started = ContinuousClock.now
         let context = context ?? self.context()
         let model = fresh(cache[context.key]).flatMap { context.kinds.contains($0.intent.kind) ? $0 : nil }
@@ -169,7 +171,7 @@ final class SectionPredictor {
         let source = model == nil ? "heuristic" : "model"
         let place = opened(landed)
         open = SessionRecord(t: .now, context: context, heuristic: context.heuristic, model: model, landed: landed, source: source,
-                             driver: Self.jevModel, opened: place)
+                             driver: Self.jevModel, openID: openID, opened: place)
         Trace.log("predict open=\(place) intent=\(PredictionPrompts.describe(landed)) source=\(source) took=\(ContinuousClock.now - started)")
         return landed
     }
@@ -198,32 +200,35 @@ final class SectionPredictor {
 
     // MARK: Model calls
 
-    /// Asks Jev about `context` and caches its pick, behind the 20 s and 300 s pauses. For an open, Luna is asked about
-    /// the same moment; that call is returned.
+    /// Asks Jev about `context` and caches its pick, behind the 20 s and 300 s pauses. For an open (`openID`), Luna is
+    /// asked about the same moment; that call is returned. Without one, this is warming.
     @discardableResult
-    func refresh(_ context: PredictionContext, onOpen: Bool = false) async -> Task<Void, Never>? {
+    func refresh(_ context: PredictionContext, for openID: String? = nil) async -> Task<Void, Never>? {
         guard await mayAskDriver(after: nextCall) else { return nil }
         defer { driverBusy = false }
-        if !onOpen { lastWarm = .now }
-        let shadow: Task<Void, Never>? = onOpen ? Task { await shadowRefresh(context) } : nil
-        Trace.log("predict ask jev \(onOpen ? "for an open" : "to warm")")
+        if openID == nil { lastWarm = .now }
+        let shadow = openID.map { id in Task { await shadowRefresh(context, for: id) } }
+        Trace.log("predict ask jev \(openID == nil ? "to warm" : "for an open")")
         let prompt = PredictionPrompts.jev(context: context, strategies: strategies, recent: Array(sessions.filter { $0.hit != nil }.suffix(15)),
                                            model: Self.jevModel)
         let reply = await call(ModelCall(purpose: "driver", model: Self.jevModel, effort: "-", prompt: prompt, schema: "",
-                                         timeout: .seconds(10)), on: driver, activity: context.activity) { DriverReply.parse($0, kinds: context.kinds) }
+                                         timeout: .seconds(10)), on: driver, activity: context.activity, openID: openID) {
+            DriverReply.parse($0, kinds: context.kinds)
+        }
         nextCall = .now + (reply != nil ? 20 : 300)
         if let reply { remember(pick(reply, context, model: Self.jevModel), in: &cache) }
         return shadow
     }
 
-    /// Luna's pick for an open's moment, scored on that open but never landed on. Outside the daily cap.
+    /// Luna's pick for one open's moment, scored on that open but never landed on. Outside the daily cap.
     /// A kept thread gets only what changed since its last turn; a new one gets the whole instruction.
-    private func shadowRefresh(_ context: PredictionContext) async {
+    private func shadowRefresh(_ context: PredictionContext, for openID: String) async {
         guard settings.prediction.useModel, !shadowBusy, Date.now >= nextShadow else { return }
         shadowBusy = true
         defer { shadowBusy = false }
         codexPath = await codex.codexPath()
         guard codexPath != nil else { return }
+        pendingLuna.insert(openID)
         let config = settings.prediction
         let resume = DriverThread.resumable(thread, model: config.lunaModel, maxTurns: config.threadTurns, maxTokens: config.threadTokens)
         let prompt = resume.map {
@@ -232,14 +237,25 @@ final class SectionPredictor {
         } ?? PredictionPrompts.luna(context: context, strategies: strategies, recent: Array(sessions.filter { $0.hit != nil }.suffix(15)))
         let reply = await call(ModelCall(purpose: "shadow", model: config.lunaModel, effort: config.lunaEffort, prompt: prompt,
                                          schema: PredictionPrompts.lunaSchema(context.kinds), timeout: .seconds(30),
-                                         keepThread: true, thread: resume?.id), on: codex, activity: context.activity) {
+                                         keepThread: true, thread: resume?.id), on: codex, activity: context.activity, openID: openID) {
             DriverReply.parse($0, kinds: context.kinds)
         }
         // A lost thread is not an outage: start a new one on the next call.
         let lost = resume != nil && thread == nil
+        // Reset memory while Luna thought forgets the open; the answer must not bring it back.
+        let wanted = pendingLuna.remove(openID) != nil
         guard let reply else { if !lost { nextShadow = .now + 300 }; return }
-        // Luna is slower than the open's wait, so the answer joins that open if it is still going.
-        if open?.context == context, open?.shadow == nil { open?.shadow = pick(reply, context, model: config.lunaModel) }
+        if wanted { await score(pick(reply, context, model: config.lunaModel), for: openID) }
+    }
+
+    /// Luna's answer goes to the open it was asked for, still going or closed, never to another; a closed one is
+    /// scored against its recorded use and rewritten in place, so it is not counted twice.
+    private func score(_ shadow: ModelPick, for openID: String) async {
+        if open?.openID == openID { open?.shadow = shadow; return }
+        guard let index = sessions.lastIndex(where: { $0.openID == openID }) else { return }
+        sessions[index].shadow = shadow
+        sessions[index].shadowHit = sessions[index].outcome.map(shadow.intent.matches)
+        await memory.replaceLine(sessions[index], in: "predictions.jsonl") { (s: SessionRecord) in s.openID == openID }
     }
 
     /// An app counts only when it is one of the running apps the models were shown.
@@ -303,9 +319,11 @@ final class SectionPredictor {
     }
 
     /// Every call lands in the ledger, whatever happens, so the owner can read what was sent and received.
-    private func call<T>(_ call: ModelCall, on runner: any ModelRunner, activity: String? = nil, parse: (String) -> T?) async -> T? {
+    private func call<T>(_ call: ModelCall, on runner: any ModelRunner, activity: String? = nil, openID: String? = nil,
+                         parse: (String) -> T?) async -> T? {
         let started = Date.now
-        var record = CallRecord(t: started, purpose: call.purpose, model: call.model, effort: call.effort, prompt: call.prompt, activity: activity)
+        var record = CallRecord(t: started, purpose: call.purpose, model: call.model, effort: call.effort, prompt: call.prompt,
+                                activity: activity, openID: openID)
         var result: T?
         do {
             let reply = try await runner.run(call)
@@ -353,20 +371,22 @@ final class SectionPredictor {
         return (jev, luna)
     }
 
-    /// Rate rows per period, current first, for Settings and the Activity window alike.
-    var cohorts: [(title: String, rows: [(label: String, rate: Rate)])] {
+    /// Rate rows per period, current first, for Settings and the Activity window alike. Pending Luna calls are only counted.
+    var cohorts: [(title: String, rows: [(label: String, value: String)])] {
         let (jev, luna) = rates
         let since = jevSince?.formatted(date: .abbreviated, time: .omitted)
         return [(since.map { "Jev driving since \($0)" } ?? "Jev driving, no opens yet",
-                 [("Jev", jev.model), ("Luna in the shadow", jev.shadow), ("Rules", jev.rules)]),
+                 [("Jev", jev.model.text), ("Luna in the shadow", jev.shadow.text), ("Luna calls pending", "\(pendingLuna.count)"),
+                  ("Rules", jev.rules.text)]),
                 (since.map { "Luna driving, before \($0)" } ?? "Luna driving, before Jev",
-                 [("Luna", luna.model), ("Jev in the shadow", luna.shadow), ("Rules", luna.rules)])]
+                 [("Luna", luna.model.text), ("Jev in the shadow", luna.shadow.text), ("Rules", luna.rules.text)])]
     }
 
     func resetMemory() async {
         cache = [:]
         sessions = []
         jevSince = nil
+        pendingLuna = []
         strategies = ""
         lastReview = nil
         open = nil
@@ -382,7 +402,7 @@ final class SectionPredictor {
                 "sessions": sessions.count, "unreviewedMisses": unreviewedMisses.count, "callsToday": callsToday,
                 "strategyLines": strategies.split(separator: "\n").count, "lastReview": lastReview?.ISO8601Format() ?? "",
                 "thread": thread?.id ?? "", "threadTurns": thread?.turns ?? 0, "threadSize": thread?.size ?? 0,
-                "codex": codexPath ?? "", "lastWarm": lastWarm == .distantPast ? "" : lastWarm.ISO8601Format(), "jevSince": jevSince?.ISO8601Format() ?? "",
+                "codex": codexPath ?? "", "lastWarm": lastWarm == .distantPast ? "" : lastWarm.ISO8601Format(), "jevSince": jevSince?.ISO8601Format() ?? "", "lunaPending": pendingLuna.count,
                 "last": last ?? [:]]
     }
 }

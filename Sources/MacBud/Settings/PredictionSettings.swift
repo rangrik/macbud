@@ -47,7 +47,7 @@ struct PredictionSettings: View {
             }
             ForEach(predictor.cohorts, id: \.title) { cohort in
                 SwiftUI.Section(cohort.title) {
-                    ForEach(cohort.rows, id: \.label) { LabeledContent($0.label, value: $0.rate.text) }
+                    ForEach(cohort.rows, id: \.label) { LabeledContent($0.label, value: $0.value) }
                 }
             }
             SwiftUI.Section {

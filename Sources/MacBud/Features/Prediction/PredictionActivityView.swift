@@ -117,7 +117,7 @@ struct PredictionActivityView: View {
                 ForEach(predictor.cohorts, id: \.title) { cohort in
                     VStack(alignment: .leading, spacing: 3) {
                         Text(cohort.title).font(.caption.bold()).foregroundStyle(.secondary)
-                        ForEach(cohort.rows, id: \.label) { Text("\($0.label) \($0.rate.text)") }
+                        ForEach(cohort.rows, id: \.label) { Text("\($0.label) \($0.value)") }
                     }.fixedSize()
                 }
             }

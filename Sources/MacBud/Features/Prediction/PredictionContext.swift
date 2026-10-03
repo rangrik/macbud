@@ -83,6 +83,8 @@ nonisolated struct SessionRecord: Codable, Identifiable, Sendable {
     var source: String
     /// The model in the driver's seat; nil on opens from before Jev drove, when Luna did.
     var driver: String?
+    /// The open request that asked Jev, so Luna's late answer scores this open and no other.
+    var openID: String?
     /// Where the open landed and where the owner acted: "shelf" or a chip. Older records name tabs.
     var opened: String
     var actedIn: String?
@@ -122,6 +124,8 @@ nonisolated struct CallRecord: Codable, Identifiable, Sendable {
     var turn: Int?
     /// The activity line this call sent; nil on calls from before there was one.
     var activity: String?
+    /// The open a Jev or Luna call was asked for; nil for warming and reviews.
+    var openID: String?
     var id: Date { t }
 }
 
