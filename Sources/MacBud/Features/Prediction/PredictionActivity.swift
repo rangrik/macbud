@@ -52,12 +52,13 @@ nonisolated enum PredictionActivity {
     /// Newest first. An open gets a second row for its outcome, linked to the driver call behind its pick.
     static func timeline(calls: [CallRecord], sessions: [SessionRecord], cap: Int) -> [ActivityEntry] {
         var seen = Set<String>(), entries: [ActivityEntry] = [], opensByCall: [Date: [SessionRecord]] = [:]
-        // Times are stored to the second, so two opens can share one.
-        func id(_ base: String, _ t: Date) -> String {
-            var id = "\(base) \(t.timeIntervalSince1970)"
+        // Times are stored to the second, so two opens, or an open's Jev and Luna calls, can share one.
+        func unique(_ base: String) -> String {
+            var id = base
             while !seen.insert(id).inserted { id += "+" }
             return id
         }
+        func id(_ base: String, _ t: Date) -> String { unique("\(base) \(t.timeIntervalSince1970)") }
         let drivers = calls.filter { $0.purpose == "driver" && $0.status == "ok" }
         for s in sessions {
             // A pick is cached for a while, so match the call that made it, not the call nearest the open.
@@ -72,8 +73,8 @@ nonisolated enum PredictionActivity {
         var perDay: [Date: Int] = [:]
         for c in calls {
             let kind: ActivityEntry.Kind = c.status != "ok" ? .error : c.purpose == "reviewer" ? .reviewer : .driver
-            entries.append(ActivityEntry(id: Self.id(of: c), t: c.t, kind: kind, summary: callSummary(c), call: c,
-                                         linkedOpens: opensByCall[c.t] ?? []))
+            entries.append(ActivityEntry(id: unique(Self.id(of: c)), t: c.t, kind: kind, summary: callSummary(c), call: c,
+                                         linkedOpens: c.purpose == "driver" ? opensByCall[c.t] ?? [] : []))
             guard c.purpose != "shadow" else { continue }
             let day = Calendar.current.startOfDay(for: c.t)
             perDay[day, default: 0] += 1
@@ -86,7 +87,7 @@ nonisolated enum PredictionActivity {
         return entries.enumerated().sorted { ($0.element.t, $0.offset) > ($1.element.t, $1.offset) }.map(\.element)
     }
 
-    private static func id(of call: CallRecord) -> String { "call \(call.t.timeIntervalSince1970)" }
+    private static func id(of call: CallRecord) -> String { "call \(call.purpose) \(call.t.timeIntervalSince1970)" }
 
     /// Calls and tokens per model today; Settings and the Activity window show the same numbers.
     /// Cached input is counted apart because it is billed at a fraction of the rest.
@@ -102,13 +103,15 @@ nonisolated enum PredictionActivity {
         if let s = entry.session {
             let used = s.outcome.map { "Used \(describe($0)) (\(s.action ?? "?") in \(s.actedIn ?? "?"), after \(s.secs ?? 0) s): \(s.hit == true ? "hit" : "miss")" }
             out.append(ActivityDetail(title: "Outcome", text: used ?? "Used nothing, so this open is not scored."))
+            // Opens from before the swap name no driver; keep their old wording.
+            let (by, said) = s.driver.map { (name($0), name($0)) } ?? ("the model", "Model")
             out.append(ActivityDetail(title: "Prediction", text: """
-                Landed on \(describe(s.landed)) in \(s.opened), picked by the \(s.source == "model" ? "model" : "rules").
-                Rules said \(s.heuristic.map(describe) ?? "nothing"). Model said \(s.model.map { describe($0.intent) + String(format: ", %.2f", $0.intent.confidence) } ?? "nothing").
+                Landed on \(describe(s.landed)) in \(s.opened), picked by \(s.source == "model" ? by : "the rules").
+                Rules said \(s.heuristic.map(describe) ?? "nothing"). \(said) said \(s.model.map { describe($0.intent) + String(format: ", %.2f", $0.intent.confidence) } ?? "nothing").
                 """))
             if let note = s.model?.note { out.append(ActivityDetail(title: "Driver's note", text: note)) }
             if let shadow = s.shadow {
-                out.append(ActivityDetail(title: "Jev, in the shadow", text: describe(shadow.intent) + String(format: ", %.2f", shadow.intent.confidence)
+                out.append(ActivityDetail(title: "\(shadow.model.map(name) ?? "Jev"), in the shadow", text: describe(shadow.intent) + String(format: ", %.2f", shadow.intent.confidence)
                                           + (s.shadowHit.map { $0 ? " · would have hit" : " · would have missed" } ?? "") + "\n" + shadow.note))
             }
             out.append(ActivityDetail(title: "Context at open", text: pretty(try? JSONEncoder().encode(s.context)), isCode: true))
@@ -119,7 +122,7 @@ nonisolated enum PredictionActivity {
         }
         guard let c = entry.call else {
             if entry.kind == .capReached {
-                out.append(ActivityDetail(title: "What happened", text: "MacBud stops calling Codex for the day at this cap, set in Settings → Prediction."))
+                out.append(ActivityDetail(title: "What happened", text: "MacBud stops asking Jev and the reviewer for the day at this cap, set in Settings → Prediction. Luna is asked only with an open's Jev call."))
             }
             return out
         }
@@ -129,12 +132,13 @@ nonisolated enum PredictionActivity {
         }
         if let thread = c.thread { out.append(ActivityDetail(title: "Codex thread", text: "\(thread), turn \(c.turn ?? 1)")) }
         let reply = (try? JSONSerialization.jsonObject(with: Data((c.reply ?? "").utf8))) as? [String: Any] ?? [:]
-        if let note = reply["note"] as? String { out.append(ActivityDetail(title: "Driver's note", text: note)) }
-        if c.purpose == "driver" {
+        if let note = reply["note"] as? String { out.append(ActivityDetail(title: c.purpose == "shadow" ? "Shadow's note" : "Driver's note", text: note)) }
+        if c.purpose != "reviewer" {
+            out.append(ActivityDetail(title: "Activity the model saw", text: c.activity ?? "Not recorded for this call."))
             let context = c.prompt.split(separator: "\n").last { $0.hasPrefix("{") }
             out.append(ActivityDetail(title: "Context sent", text: pretty(context.map { Data($0.utf8) }), isCode: true))
         }
-        if entry.kind == .driver {
+        if entry.kind == .driver, c.purpose == "driver" {
             let opens = entry.linkedOpens.map { s in
                 "\(s.t.formatted(date: .omitted, time: .standard)) · opened \(s.opened) on \(describe(s.landed)) · "
                     + (s.outcome.map { "used \(describe($0)), \(s.hit == true ? "hit" : "miss")" } ?? "used nothing")
@@ -194,12 +198,14 @@ nonisolated enum PredictionActivity {
 
     private static func describe(_ intent: LandingIntent) -> String { "\(intent.kind.rawValue) · \(intent.hint.rawValue)" }
 
+    private static func name(_ model: String) -> String { model == SectionPredictor.jevModel ? "Jev" : model }
+
     private static func describe(_ outcome: Outcome) -> String {
         outcome.kind.rawValue + (outcome.newest.map { $0 ? " · newest" : " · older" } ?? "")
     }
 
     private static func openSummary(_ s: SessionRecord) -> String {
-        "Opened \(s.opened) on \(describe(s.landed)) (" + (s.source == "model" ? String(format: "model, %.2f", s.landed.confidence) : "rules") + ")"
+        "Opened \(s.opened) on \(describe(s.landed)) (" + (s.source == "model" ? (s.driver.map(name) ?? "model") + String(format: ", %.2f", s.landed.confidence) : "rules") + ")"
     }
 
     private static func callSummary(_ c: CallRecord) -> String {
@@ -211,12 +217,13 @@ nonisolated enum PredictionActivity {
         // Replies before 0.8.0 named a section instead of a kind.
         let pick = [(reply["kind"] ?? reply["section"]) as? String, reply["hint"] as? String].compactMap { $0 }.joined(separator: " · ")
         let confidence = (reply["confidence"] as? Double).map { String(format: "%.2f", $0) }
-        return "Driver said " + [pick.isEmpty ? "?" : pick, confidence, cost].compactMap { $0 }.joined(separator: ", ")
+        return "\(c.purpose.capitalized) \(name(c.model)) said " + [pick.isEmpty ? "?" : pick, confidence, cost].compactMap { $0 }.joined(separator: ", ")
     }
 
     private static func pretty(_ json: Data?) -> String {
         guard let json, let object = try? JSONSerialization.jsonObject(with: json),
-              let data = try? JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys]) else { return "Not recorded." }
+              let data = try? JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
+        else { return "Not recorded." }
         return String(decoding: data, as: UTF8.self)
     }
 }

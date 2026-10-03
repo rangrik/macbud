@@ -4,7 +4,7 @@ import Testing
 
 @MainActor @Suite struct PredictionTests {
     /// Seam: store items and outcomes → prompt text. Catches clipboard text, paths, file names, dictation text
-    /// or window titles reaching Codex, and the running apps an `app` pick needs not reaching it.
+    /// or an app card's window title reaching a model, and the running apps an `app` pick needs not reaching it.
     @Test func promptsCarryMetadataOnly() {
         let now = Date.now
         let clips = [ClipboardItem(id: UUID(), kind: .text, copiedAt: now - 5, text: "hunter2-token", byteCount: 13,
@@ -23,7 +23,7 @@ import Testing
                               windowID: "w", label: "Layoffs draft.pdf")
         let switched = SessionRecord(t: now, context: context, heuristic: rule, landed: rule, source: "heuristic", opened: "all",
                                      outcome: .app(window, switchTarget: nil), hit: false)
-        for prompt in [PredictionPrompts.driver(context: context, strategies: "", recent: [miss, switched]),
+        for prompt in [PredictionPrompts.luna(context: context, strategies: "", recent: [miss, switched]),
                        PredictionPrompts.delta(context: context, since: now - 60, sessions: [miss, switched], events: [EventRecord(t: now, context: context)],
                                                strategies: "", written: nil),
                        PredictionPrompts.reviewer(strategies: "", misses: [miss, switched], hits: [], rates: "")] {
@@ -37,9 +37,10 @@ import Testing
         #expect(jev.contains("slackmacgap") && jev.contains("Preview") && jev.contains("seconds ago"))
     }
 
-    /// Seam: Jev's answers → the driver's reply shape → a scored shadow on the open.
-    /// Catches a shadow that lands, goes unscored, flips the status, or eats the daily cap.
-    @Test func shadowIsScoredButNeverLands() async throws {
+    /// Seam: Jev's answers → the landing, Luna's → a scored shadow, both stamped with who answered.
+    /// Catches a shadow that lands, goes unscored, flips Jev's status or eats the daily cap, and an open
+    /// from before the swap (Luna driving, Jev in the shadow) counted as Jev's result.
+    @Test func jevDrivesLunaIsScoredInTheShadowAndOldOpensStayApart() async throws {
         let answers = #"""
         {"model":"jev-1.13.0","answers":{"kind":{"type":"choice","choice":"snippet","probabilities":{"snippet":0.7,"text":0.3},"confidence":0.55},
         "which_item":{"type":"choice","choice":"either","probabilities":{"either":0.8,"newest":0.1,"older":0.1},"confidence":0.7}},
@@ -49,29 +50,225 @@ import Testing
         let parsed = try #require(DriverReply.parse(reply.text, kinds: IntentKind.allCases))
         #expect(parsed.kind == .snippet && parsed.hint == .any && parsed.confidence == 0.55 && reply.tokens.input == 900)
         let context = context()
-        let driver = FakeRunner(["driver": .success(#"{"kind":"text","hint":"any","confidence":0.5,"note":"n"}"#)])
-        let (predictor, _) = makePredictor(driver, context, shadow: FakeRunner(["shadow": .failure(ModelError(message: "HTTP 529"))]))
-        await predictor.refresh(context)
-        await predictor.shadowRefresh(context)
-        #expect(predictor.status == .ready && predictor.calls.last?.status == "failed")
-        let (scored, _) = makePredictor(driver, context, shadow: FakeRunner(["shadow": .success(reply.text)]))
-        await scored.refresh(context)
-        await scored.shadowRefresh(context)
-        #expect(scored.intentForOpen { _ in "shelf" }?.kind == .text)
-        scored.noteAction("copy", outcome: Outcome(kind: .snippet), in: "snippets")
+        let jev = FakeRunner(["driver": .success(reply.text)])
+        let (failing, _) = makePredictor(jev, context, codex: FakeRunner(["shadow": .failure(ModelError(message: "Model not supported"))]))
+        await failing.refresh(context, for: "o0")?.value
+        #expect(failing.status == .ready && failing.calls.last { $0.purpose == "shadow" }?.status == "failed")
+
+        let pick = #"{"intent":{"kind":"%@","hint":"any","confidence":0.8},"note":"n","key":"k","madeAt":"2026-09-30T09:59:00Z"}"#
+        let old = #"{"t":"2026-09-30T10:00:00Z","context":{"hour":10,"weekday":"Wed","kinds":["text","snippet"]},"#
+            + #""landed":{"kind":"text","hint":"any","confidence":0.8},"source":"model","opened":"shelf","outcome":{"kind":"text"},"#
+            + #""model":\#(String(format: pick, "text")),"shadow":\#(String(format: pick, "snippet")),"hit":true,"shadowHit":false}"#
+        let memory = DataStore(directory: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString))
+        await memory.writeText(old + "\n", to: "predictions.jsonl")
+        let luna = FakeRunner(["shadow": .success(#"{"kind":"text","hint":"any","confidence":0.5,"note":"n"}"#)])
+        let (scored, _) = makePredictor(jev, context, memory, codex: luna)
+        await scored.start()
+        await scored.activity.record(ActivityEvent(t: .now, app: "com.apple.dt.Xcode", title: "Plan.swift", url: "github.com/rangrik/macbud"))
+        let now = scored.context()
+        await luna.hold()
+        let shadow = await scored.refresh(now, for: "o1")
+        #expect(scored.intentForOpen(now, openID: "o1") { _ in "shelf" }?.kind == .snippet)
+        await luna.release()
+        await shadow?.value
+        let sent = "just now: com.apple.dt.Xcode, “Plan.swift”, github.com/rangrik/macbud"
+        #expect(now.activity == sent && scored.calls.count == 2 && scored.calls.allSatisfy { $0.activity == sent })
+        #expect(await jev.prompts["driver"]?.contains(sent) == true)
+        #expect(await luna.prompts["shadow"]?.contains(sent) == true)
+        scored.noteAction("copy", outcome: Outcome(kind: .text), in: "shelf")
         scored.sessionEnded()
         let session = try #require(scored.sessions.last)
-        #expect(session.hit == false && session.shadowHit == true && session.shadow?.intent.kind == .snippet)
-        #expect(scored.rates.shadow.hits == 1 && scored.rates.landedWhereShadow.total == 1 && scored.rates.landedWhereShadow.hits == 0)
+        #expect(session.hit == false && session.shadowHit == true && session.driver == "jev-latest")
+        #expect(session.model?.model == "jev-latest" && session.shadow?.model == "gpt-6-luna" && scored.jevSince == session.t)
+        let rates = scored.rates
+        #expect(rates.jev.model.total == 1 && rates.jev.model.hits == 0 && rates.jev.shadow.hits == 1 && rates.jev.landedWhereShadow.hits == 0)
+        #expect(rates.luna.model.hits == 1 && rates.luna.shadow.total == 1 && rates.luna.shadow.hits == 0)
         #expect(scored.callsToday == 1, "shadow calls stay outside the cap")
+    }
+
+    /// Seam: running apps → Jev's `which_app` question and answer → the cached pick's app. Catches two copies of one app
+    /// crashing the request or taking two of the eight slots, a confident running app lost, and a low-confidence, `none`
+    /// or not-running answer naming an app.
+    @Test func jevNamesAnAppOnlyWhenConfidentAndRunning() async throws {
+        let apps = (1...9).map { "com.example.App\($0)" }
+        let captured = PredictionContext.capture(clipboard: [], media: [], dictations: [], app: apps[0], running: [apps[0], apps[0]] + apps,
+                                                 kinds: IntentKind.allCases)
+        #expect(captured.runningApps == Array(apps.prefix(8)) && captured.previousApp == apps[1])
+        let running = ["com.tinyspeck.slackmacgap", "com.apple.Safari"]
+        // Hand-built with a duplicate, as a context from elsewhere could be; the request must still build.
+        let context = PredictionContext(hour: 10, weekday: "Thu", app: "com.apple.Safari", previousApp: running[0],
+                                        runningApps: running + [running[0]], kinds: IntentKind.allCases)
+        let body = PredictionPrompts.jev(context: context, strategies: "", recent: [], model: "jev-latest")
+        #expect(body.contains(#""which_app""#) && body.contains(#""com.tinyspeck.slackmacgap":"slackmacgap, running now""#))
+        let cases: [(String, Double, String?)] = [(running[0], 0.7, running[0]), (running[0], 0.4, nil), ("none", 0.9, nil), ("com.not.Running", 0.9, nil)]
+        for (app, confidence, expected) in cases {
+            let answers = #"{"answers":{"kind":{"choice":"app","confidence":0.8},"which_item":{"choice":"newest","confidence":0.9},"#
+                + #""which_app":{"choice":"\#(app)","confidence":\#(confidence)}}}"#
+            let (predictor, _) = makePredictor(FakeRunner(["driver": .success(try JevRunner.normalize(Data(answers.utf8)).text)]), context)
+            await predictor.refresh(context)
+            #expect(predictor.intentForOpen(context) { _ in "shelf" }?.app == expected)
+        }
+    }
+
+    /// Seam: an Accessibility read → the recorded event. Catches reading while locked, idle or untrusted, a secure field's
+    /// window being read, file paths, user-info, queries or fragments kept as web addresses, and with focus unknown: a
+    /// sign-in title or path (any case) keeping its title or address, an ordinary page losing them, or no marker.
+    @Test func activityRecordsOnlyWhatIsAllowed() {
+        for (trusted, locked, idle) in [(false, false, 0.0), (true, true, 0), (true, false, 300)] {
+            #expect(ActivityProbe.gate(trusted: trusted, locked: locked, idle: idle) { Issue.record("read while blocked"); return nil } == nil)
+        }
+        let secure = ActivityEvent.read(t: .now, app: "com.apple.Safari", role: "AXTextField", subrole: "AXSecureTextField") {
+            Issue.record("a secure field's window was read")
+            return ("Bank login", "https://bank.example/login")
+        }
+        #expect(secure == ActivityEvent(t: secure.t, app: "com.apple.Safari", role: "secure field"))
+        let page = ActivityEvent.read(t: .now, app: "com.apple.Safari", role: "AXTextArea", subrole: nil) {
+            ("Pull requests", URL(string: "https://owner:secret@github.com/rangrik/macbud/pulls?token=abc#top"))
+        }
+        #expect(page.title == "Pull requests" && page.url == "github.com/rangrik/macbud/pulls" && page.role == "text area")
+        for raw in ["file:///Users/owner/Private/Plan.pdf", "not a url", 42] as [Any] { #expect(ActivityEvent.webAddress(raw) == nil) }
+        let signIn: [(String, String)] = [("Bank", "https://bank.example/SignIn?next=1"), ("Log In to Bank", "https://bank.example/home")]
+        for (title, url) in signIn {
+            let unknown = ActivityEvent.read(t: page.t, app: "com.google.Chrome", role: nil, subrole: nil) { (title, URL(string: url)) }
+            #expect(unknown == ActivityEvent(t: page.t, app: "com.google.Chrome", role: "focus unknown"))
+        }
+        let plain = ActivityEvent.read(t: page.t, app: "com.google.Chrome", role: nil, subrole: nil) { ("Docs", URL(string: "https://docs.example/guide")) }
+        #expect(plain == ActivityEvent(t: page.t, app: "com.google.Chrome", title: "Docs", url: "docs.example/guide", role: "focus unknown"))
+    }
+
+    /// Seam: recorded events → the activity file and the line both models read. Catches a day-old event surviving a relaunch,
+    /// a line past 10 minutes or 8 events or out of order, and a role-only change counted as a change worth a call.
+    @Test func activityFileAndLineStayBounded() async {
+        let memory = DataStore(directory: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString))
+        let now = Date.now
+        await memory.appendLine(ActivityEvent(t: now - 86_000, app: "com.old.App"), to: ActivityLog.file)
+        let log = ActivityLog(memory: memory) { _, _ in nil }
+        await log.load()
+        #expect(log.line(now: now) == "No recent activity.")
+        #expect(await memory.lines(ActivityEvent.self, in: ActivityLog.file).isEmpty)
+        await log.record(ActivityEvent(t: now - 700, app: "com.too.Old"))
+        for i in 0..<10 { await log.record(ActivityEvent(t: now - 590 + Double(i) * 60, app: "app\(i)", title: "T\(i)")) }
+        let parts = log.line(now: now).components(separatedBy: "; ")
+        #expect(parts.count == 8 && parts.first == "7 min ago: app2, “T2”" && parts.last == "just now: app9, “T9”")
+        let changed = log.changedAt
+        await log.record(ActivityEvent(t: now, app: "app9", title: "T9", role: "text field"))
+        #expect(log.changedAt == changed && log.events.last?.role == "text field")
+        await log.record(ActivityEvent(t: now, app: "app9", title: "T9", url: "example.com/b", role: "text field"))
+        #expect(log.changedAt == now)
+    }
+
+    /// Seam: activity changes → background warming. Catches warming before 10 quiet seconds, more than once in 10 minutes,
+    /// on a role-only change or with a current pick, a same-host page change not counting, Luna asked for warming,
+    /// and an open asking inside the 20 s pause after a success.
+    @Test func jevWarmsAtMostEveryTenMinutesWithoutLuna() async {
+        let jev = FakeRunner(["driver": .success(#"{"kind":"snippet","hint":"any","confidence":0.9,"note":"n"}"#)])
+        let (predictor, _) = makePredictor(jev, context(), codex: FakeRunner(["shadow": .success(#"{"kind":"text","hint":"any","confidence":0.5,"note":"n"}"#)]))
+        let t = Date.now
+        await predictor.activity.record(ActivityEvent(t: t, app: "com.apple.dt.Xcode", title: "Plan", url: "github.com/a"))
+        let now = predictor.context()
+        #expect(!predictor.wantsWarming(now, at: t + 9) && predictor.wantsWarming(now, at: t + 10))
+        #expect(await predictor.refresh(now) == nil && predictor.calls.map(\.purpose) == ["driver"], "warming never asks Luna")
+        #expect(!predictor.wantsWarming(now, at: t + 700), "a current pick needs no warming")
+        await predictor.activity.record(ActivityEvent(t: t + 20, app: "com.apple.dt.Xcode", title: "Plan", url: "github.com/a", role: "text field"))
+        #expect(!predictor.wantsWarming(predictor.context(), at: t + 700), "a role-only change is not worth a call")
+        await predictor.activity.record(ActivityEvent(t: t + 30, app: "com.apple.dt.Xcode", title: "Plan", url: "github.com/b"))
+        let moved = predictor.context()
+        #expect(moved.key == now.key && !predictor.wantsWarming(moved, at: t + 40) && predictor.wantsWarming(moved, at: t + 610))
+        #expect(!predictor.wantsCallBeforeOpen(moved), "opens wait out the 20 s pause too")
+    }
+
+    /// Seam: an open with no current pick → Jev within the budget, Luna on that open. Catches an open asking past the cap,
+    /// waiting past its budget, a late Jev reply changing an open that landed, and Luna's answer missing the open it was for.
+    @Test func anOpenWaitsBrieflyAndLunaAnswersThatOpen() async throws {
+        let jev = FakeRunner(["driver": .success(#"{"kind":"snippet","hint":"any","confidence":0.9,"note":"n"}"#)])
+        let luna = FakeRunner(["shadow": .success(#"{"kind":"text","hint":"any","confidence":0.5,"note":"n"}"#)])
+        let (predictor, settings) = makePredictor(jev, context(), codex: luna)
+        await predictor.checkDriver()
+        let now = predictor.context()
+        settings.prediction.dailyCallCap = 0
+        #expect(!predictor.wantsCallBeforeOpen(now))
+        settings.prediction.dailyCallCap = 100
+        #expect(predictor.wantsCallBeforeOpen(now))
+        await jev.hold()
+        await luna.hold()
+        await predictor.callBeforeOpen(now, openID: "o1", budget: .milliseconds(50))
+        #expect(predictor.intentForOpen(now, openID: "o1") { _ in "shelf" }?.kind == .text, "Jev missed the budget, so the rules land")
+        await jev.release()
+        await luna.release()
+        for _ in 0..<200 where predictor.open?.shadow == nil { try await Task.sleep(for: .milliseconds(5)) }
+        predictor.noteAction("copy", outcome: Outcome(kind: .snippet), in: "shelf")
+        predictor.sessionEnded()
+        let session = try #require(predictor.sessions.last)
+        #expect(session.landed.kind == .text && session.source == "heuristic" && session.shadow?.model == "gpt-6-luna" && session.shadowHit == false)
+    }
+
+    /// Seam: Luna's late answer → the open it was asked for, in memory and on disk. Catches an answer lost after its open
+    /// closed, landing on a later open with the same context, scoring an open with no use, restoring a session after Reset,
+    /// counting the open twice after a reload, and pending calls that never clear or survive a relaunch.
+    @Test func lunaScoresItsOwnOpenEvenAfterItCloses() async throws {
+        let jev = FakeRunner(["driver": .success(#"{"kind":"snippet","hint":"any","confidence":0.9,"note":"n"}"#)])
+        let luna = FakeRunner(["shadow": .success(#"{"kind":"text","hint":"any","confidence":0.5,"note":"n"}"#)])
+        let memory = DataStore(directory: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString))
+        func open(_ predictor: SectionPredictor, _ id: String?, used: Outcome?) {
+            _ = predictor.intentForOpen(predictor.context(), openID: id) { _ in "shelf" }
+            if let used { predictor.noteAction("copy", outcome: used, in: "shelf") }
+            predictor.sessionEnded()
+        }
+        func askLuna(_ predictor: SectionPredictor, _ id: String) async throws -> Task<Void, Never>? {
+            await luna.hold()
+            let answer = await predictor.refresh(predictor.context(), for: id)
+            for _ in 0..<200 where predictor.pendingLuna.isEmpty { try await Task.sleep(for: .milliseconds(5)) }
+            #expect(predictor.pendingLuna == [id] && predictor.cohorts[0].rows.contains { $0 == ("Luna calls pending", "1") })
+            return answer
+        }
+        let (first, _) = makePredictor(jev, context(), memory, codex: luna)
+        let late = try await askLuna(first, "o1")
+        open(first, "o1", used: Outcome(kind: .text))
+        open(first, nil, used: Outcome(kind: .text))
+        await luna.release()
+        await late?.value
+        #expect(first.sessions.map(\.shadowHit) == [true, nil] && first.pendingLuna.isEmpty)
+        let reloaded = makePredictor(jev, context(), memory).0
+        await reloaded.start()
+        #expect(reloaded.sessions.map(\.shadowHit) == [true, nil] && reloaded.rates.jev.shadow.total == 1 && reloaded.pendingLuna.isEmpty)
+
+        let (unused, _) = makePredictor(jev, context(), codex: luna)
+        let noUse = try await askLuna(unused, "o2")
+        open(unused, "o2", used: nil)
+        await luna.release()
+        await noUse?.value
+        #expect(unused.sessions.first?.shadow != nil && unused.sessions.first?.shadowHit == nil && unused.rates.jev.shadow.total == 0)
+
+        let (forgotten, _) = makePredictor(jev, context(), codex: luna)
+        let afterReset = try await askLuna(forgotten, "o3")
+        open(forgotten, "o3", used: Outcome(kind: .text))
+        await forgotten.resetMemory()
+        await luna.release()
+        await afterReset?.value
+        #expect(forgotten.sessions.isEmpty && forgotten.pendingLuna.isEmpty && forgotten.cohorts[0].rows.contains { $0 == ("Luna calls pending", "0") })
+        #expect(await forgotten.memory.lines(SessionRecord.self, in: "predictions.jsonl").isEmpty)
+    }
+
+    /// Seam: an open's own save ↔ a Luna score written in the same instant. Catches the score landing before the save and
+    /// the file keeping the unscored line, and the open saved twice.
+    @Test func aScoreThatBeatsItsOpensSaveStillLands() async throws {
+        let memory = DataStore(directory: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString))
+        let (predictor, _) = makePredictor(FakeRunner([:]), context(), memory)
+        _ = predictor.intentForOpen(predictor.context(), openID: "o1") { _ in "shelf" }
+        predictor.noteAction("copy", outcome: Outcome(kind: .text), in: "shelf")
+        predictor.sessionEnded()
+        // No suspension since sessionEnded, so its save task has not had a turn: the score's rewrite goes first.
+        await predictor.score(ModelPick(intent: LandingIntent(kind: .text), note: "n", key: "k", madeAt: .now, model: "gpt-6-luna"), for: "o1")
+        for _ in 0..<200 where await memory.lines(SessionRecord.self, in: "predictions.jsonl").isEmpty { try await Task.sleep(for: .milliseconds(5)) }
+        #expect(await memory.lines(SessionRecord.self, in: "predictions.jsonl").map(\.shadowHit) == [true])
     }
 
     /// Seam: runner failure → open path. Catches a broken CLI leaving the open without the rules' pick.
     @Test func failingRunnerLeavesTheRulesInCharge() async {
         let context = context(screenshotAge: 10)
-        let (predictor, _) = makePredictor(FakeRunner(["driver": .failure(ModelError(message: "Not signed in"))]), context)
+        let (predictor, _) = makePredictor(FakeRunner(["driver": .failure(ModelError(message: "HTTP 401"))]), context)
         await predictor.refresh(context)
-        #expect(predictor.status == .failed("Not signed in"))
+        #expect(predictor.status == .failed("HTTP 401"))
         #expect(predictor.calls.last?.status == "failed")
         #expect(predictor.intentForOpen { _ in "shelf" }?.kind == .screenshot)
     }
@@ -100,13 +297,14 @@ import Testing
         #expect(refusing.intentForOpen { _ in "shelf" }?.kind == .text)
     }
 
-    /// Seam: recorded misses → reviewer → strategies file → next driver prompt.
-    /// Catches a reviewer that never fires, a strategies file that is not written, or a driver that never reads it.
-    @Test func missesPastTheThresholdRewriteWhatTheDriverReads() async throws {
-        let runner = FakeRunner(["driver": .success(#"{"kind":"text","hint":"any","confidence":0.5,"note":"n"}"#),
-                                 "reviewer": .success(#"{"strategies":"- In Xcode, open Snippets.","summary":"s"}"#)])
+    /// Seam: recorded misses → Codex reviewer → strategies file → both models' next requests.
+    /// Catches a reviewer that never fires, a strategies file that is not written, or a model that never reads it.
+    @Test func missesPastTheThresholdRewriteWhatBothModelsRead() async throws {
+        let jev = FakeRunner(["driver": .success(#"{"kind":"text","hint":"any","confidence":0.5,"note":"n"}"#)])
+        let codex = FakeRunner(["shadow": .success(#"{"kind":"text","hint":"any","confidence":0.5,"note":"n"}"#),
+                                "reviewer": .success(#"{"strategies":"- In Xcode, open Snippets.","summary":"s"}"#)])
         let context = context()
-        let (predictor, settings) = makePredictor(runner, context)
+        let (predictor, settings) = makePredictor(jev, context, codex: codex)
         settings.prediction.missThreshold = 2
         for _ in 0..<2 {
             #expect(predictor.intentForOpen { _ in "shelf" }?.kind == .text)
@@ -115,8 +313,9 @@ import Testing
         }
         for _ in 0..<200 where predictor.lastReview == nil { try await Task.sleep(for: .milliseconds(10)) }
         #expect(await predictor.memory.text("strategies.md")?.text == "- In Xcode, open Snippets.\n")
-        await predictor.refresh(context)
-        #expect(await runner.prompts["driver"]?.contains("- In Xcode, open Snippets.") == true)
+        await predictor.refresh(context, for: "o1")?.value
+        #expect(await jev.prompts["driver"]?.contains("- In Xcode, open Snippets.") == true)
+        #expect(await codex.prompts["shadow"]?.contains("- In Xcode, open Snippets.") == true)
         #expect(ReviewTrigger.isDue(misses: 1, since: .now - 12 * 3600, now: .now, threshold: 10, hours: 12))
     }
 
@@ -152,57 +351,64 @@ import Testing
             let stale = DriverThread(id: "t", model: "m", turns: turns, size: size, lastCall: .now)
             #expect(DriverThread.resumable(stale, model: model, maxTurns: 40, maxTokens: 30_000) == nil)
         }
-        // Settings saved before these knobs existed must keep the owner's choices, not reset to defaults.
-        let saved = try JSONDecoder().decode(PredictionConfig.self, from: Data(#"{"enabled":true,"useModel":false}"#.utf8))
-        #expect(!saved.useModel && saved.threadTurns == 40)
+        // Settings saved before these knobs existed, or while Luna drove, must keep the owner's choices.
+        let saved = try JSONDecoder().decode(PredictionConfig.self, from: Data(#"{"useModel":false,"driverModel":"gpt-x","driverEffort":"low"}"#.utf8))
+        #expect(!saved.useModel && saved.threadTurns == 40 && saved.lunaModel == "gpt-x" && saved.lunaEffort == "low" && saved.enabled)
     }
 
-    /// Seam: driver calls ↔ the kept Codex thread, across relaunches. Catches a thread re-sent the whole instruction,
+    /// Seam: Luna's shadow calls ↔ the kept Codex thread, across relaunches. Catches a thread re-sent the whole instruction,
     /// running totals logged as one turn's tokens, a thread id lost on relaunch, and a lost thread that never recovers.
-    @Test func driverResumesOneThreadAndStartsOverWhenItIsLost() async throws {
-        let runner = FakeRunner(["driver": .success(#"{"kind":"text","hint":"any","confidence":0.5,"note":"n"}"#)])
+    @Test func lunaResumesOneThreadAndStartsOverWhenItIsLost() async throws {
+        let codex = FakeRunner(["shadow": .success(#"{"kind":"text","hint":"any","confidence":0.5,"note":"n"}"#)])
+        let jev = FakeRunner(["driver": .success(#"{"kind":"text","hint":"any","confidence":0.5,"note":"n"}"#)])
         let context = context()
         let memory = DataStore(directory: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString))
         func launch() async -> SectionPredictor {
-            let predictor = makePredictor(runner, context, memory).0
+            let predictor = makePredictor(jev, context, memory, codex: codex).0
             await predictor.start()
-            await predictor.refresh(context)
+            await predictor.refresh(context, for: UUID().uuidString)?.value
             return predictor
         }
         #expect(await launch().thread?.id == "t1")
-        #expect(await runner.prompts["driver"]?.contains("Kinds they can reach now") == true)
+        #expect(await codex.prompts["shadow"]?.contains("Kinds they can reach now") == true)
         let relaunched = await launch()
-        #expect(await runner.prompts["driver"]?.hasPrefix("## Since your last pick") == true)
-        #expect(relaunched.calls.last?.thread == "t1" && relaunched.calls.last?.turn == 2 && relaunched.calls.last?.tokens?.input == 10)
-        await runner.forget("t1")
+        let turn = relaunched.calls.last { $0.purpose == "shadow" }
+        #expect(await codex.prompts["shadow"]?.hasPrefix("## Since your last pick") == true)
+        #expect(turn?.thread == "t1" && turn?.turn == 2 && turn?.tokens?.input == 10)
+        await codex.forget("t1")
         #expect(await launch().thread == nil)
         #expect(await launch().thread?.id == "t2")
-        #expect(await runner.prompts["driver"]?.contains("Kinds they can reach now") == true)
+        #expect(await codex.prompts["shadow"]?.contains("Kinds they can reach now") == true)
     }
 
     private func context(screenshotAge: Int? = nil, kinds: [IntentKind] = IntentKind.allCases) -> PredictionContext {
         PredictionContext(hour: 10, weekday: "Thu", app: "com.apple.dt.Xcode", screenshotAge: screenshotAge, kinds: kinds)
     }
 
-    private func makePredictor(_ runner: FakeRunner, _ context: PredictionContext,
+    /// Without a Codex runner given, Codex is "not found", so Luna stays quiet.
+    private func makePredictor(_ jev: FakeRunner, _ context: PredictionContext,
                                _ memory: DataStore = DataStore(directory: FileManager.default.temporaryDirectory
-                                   .appendingPathComponent(UUID().uuidString)), shadow: FakeRunner? = nil) -> (SectionPredictor, AppSettings) {
+                                   .appendingPathComponent(UUID().uuidString)), codex: FakeRunner = FakeRunner([:], path: nil)) -> (SectionPredictor, AppSettings) {
         let settings = AppSettings(defaults: UserDefaults(suiteName: UUID().uuidString)!)
-        return (SectionPredictor(settings: settings, memory: memory, runner: runner, shadow: shadow) { context }, settings)
+        return (SectionPredictor(settings: settings, memory: memory, driver: jev, codex: codex, probe: { _, _ in nil }) { context }, settings)
     }
 }
 
-private actor FakeRunner: ModelRunner {
+actor FakeRunner: ModelRunner {
     let replies: [String: Result<String, ModelError>]
+    let path: String?
     var prompts: [String: String] = [:]
     /// Kept threads and their turn counts, like Codex's stored sessions.
     var threads: [String: Int] = [:], made = 0
+    /// While held, calls wait for `release`, like a slow network.
+    private var holding = false, held: [CheckedContinuation<Void, Never>] = []
 
-    init(_ replies: [String: Result<String, ModelError>]) { self.replies = replies }
+    init(_ replies: [String: Result<String, ModelError>], path: String? = "/fake/codex") { self.replies = replies; self.path = path }
 
-    func codexPath() async -> String? { "/fake/codex" }
+    func codexPath() async -> String? { path }
     func run(_ call: ModelCall) async throws -> ModelReply {
         prompts[call.purpose] = call.prompt
+        if holding { await withCheckedContinuation { held.append($0) } }
         var id: String?
         if call.keepThread {
             if let old = call.thread, threads[old] == nil { throw ModelError(message: "no rollout found", threadGone: true) }
@@ -216,4 +422,6 @@ private actor FakeRunner: ModelRunner {
     }
 
     func forget(_ id: String) { threads[id] = nil }
+    func hold() { holding = true }
+    func release() { holding = false; held.forEach { $0.resume() }; held = [] }
 }

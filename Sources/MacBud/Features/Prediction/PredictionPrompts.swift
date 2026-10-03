@@ -1,6 +1,6 @@
 import Foundation
 
-/// Builds what the models read. Only `PredictionContext` metadata and our own records go in, and no tab names.
+/// Builds what the models read. Only `PredictionContext` and our own records go in, and no tab names.
 nonisolated enum PredictionPrompts {
     static let instructions = "Reply with JSON only, matching the schema. You have no tools.\n"
 
@@ -14,7 +14,8 @@ nonisolated enum PredictionPrompts {
         + "older = an earlier one they will look for; any = no guess. "
         + "For app you may instead name one app from runningApps by bundle id."
 
-    static func driver(context: PredictionContext, strategies: String, recent: [SessionRecord]) -> String {
+    /// Luna's first turn on a thread; later turns get `delta`.
+    static func luna(context: PredictionContext, strategies: String, recent: [SessionRecord]) -> String {
         """
         You predict what the owner of MacBud, a Mac notch utility, wants to reach when they press its open key.
         Kinds they can reach now:
@@ -36,7 +37,7 @@ nonisolated enum PredictionPrompts {
         """
     }
 
-    /// A later turn in the driver's thread: only what happened after `last`.
+    /// A later turn in Luna's thread: only what happened after `last`.
     static func delta(context: PredictionContext, since last: Date, sessions: [SessionRecord], events: [EventRecord],
                       strategies: String, written: Date?) -> String {
         let news = sessions.filter { $0.hit != nil && $0.t + ($0.secs ?? 0) > last }.map(line) + added(events, since: last)
@@ -82,7 +83,7 @@ nonisolated enum PredictionPrompts {
         ## Current strategies
         \(strategies.isEmpty ? "None yet." : strategies)
 
-        ## Hit rates, last 7 days
+        ## Hit rates
         \(rates)
 
         ## Misses since the last review
@@ -128,13 +129,14 @@ nonisolated enum PredictionPrompts {
             "latest_dictation": ["finished": age(context.dictationAge)],
             "recent_opens_oldest_first": recent.isEmpty ? ["none yet"] : recent.map(open),
         ]
+        if let activity = context.activity { state["recent_activity"] = activity }
         if let previous = context.previousApp { state["previous_app"] = short(previous) }
         if let running = context.runningApps { state["running_apps"] = running.map { short($0) } }
         if !strategies.isEmpty { state["rules_written_by_a_reviewer_from_past_misses"] = strategies }
-        let questions: [String: Any] = [
+        var questions: [String: Any] = [
             "kind": ["type": "choice",
                      "instructions": "The owner of a Mac utility just pressed its open key. Which kind of item are they most likely "
-                         + "reaching for right now? Weigh `front_app`, how recently each item arrived, and `recent_opens_oldest_first`.",
+                         + "reaching for right now? Weigh `front_app`, `recent_activity`, how recently each item arrived, and `recent_opens_oldest_first`.",
                      "criteria": Dictionary(uniqueKeysWithValues: context.kinds.map { ($0.rawValue, meanings[$0] ?? "") })],
             "which_item": ["type": "choice",
                            "instructions": "Within the kind they are reaching for, do they want the most recent item of that kind, "
@@ -143,12 +145,18 @@ nonisolated enum PredictionPrompts {
                                         "older": "an earlier item of that kind that they will look for",
                                         "either": "nothing here says which; they will pick either way"]],
         ]
+        if let running = context.runningApps, !running.isEmpty {
+            questions["which_app"] = ["type": "choice",
+                                      "instructions": "If they are reaching for an app, which running app? `none` unless something here points to one.",
+                                      "criteria": Dictionary(running.prefix(8).map { ($0, short($0) + ", running now") }) { a, _ in a }
+                                          .merging(["none": "no app in particular"]) { a, _ in a }]
+        }
         let body: [String: Any] = ["model": model, "state": state, "questions": questions]
-        let data = (try? JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])) ?? Data()
+        let data = (try? JSONSerialization.data(withJSONObject: body, options: [.sortedKeys, .withoutEscapingSlashes])) ?? Data()
         return String(decoding: data, as: UTF8.self)
     }
 
-    static func driverSchema(_ kinds: [IntentKind]) -> String {
+    static func lunaSchema(_ kinds: [IntentKind]) -> String {
         schema(["kind": ["type": "string", "enum": kinds.map(\.rawValue)], "app": ["type": "string"],
                 "hint": ["type": "string", "enum": ItemHint.allCases.map(\.rawValue)],
                 "confidence": ["type": "number"], "note": ["type": "string"]])
@@ -161,13 +169,13 @@ nonisolated enum PredictionPrompts {
     private static func line(_ s: SessionRecord) -> String {
         let time = s.t.formatted(.dateTime.weekday(.abbreviated).hour(.twoDigits(amPM: .omitted)).minute())
         let used = s.outcome.map { $0.kind.rawValue + ($0.app.map { " \($0)" } ?? "") + ($0.newest.map { $0 ? " (newest)" : " (older)" } ?? "") } ?? "nothing"
-        return "\(time) · app \(s.context.app ?? "-") · predicted \(describe(s.landed)) by \(s.source == "model" ? "you" : "the fallback rule")"
+        return "\(time) · app \(s.context.app ?? "-") · predicted \(describe(s.landed)) by \(s.source == "model" ? s.model?.model ?? "the model" : "the fallback rule")"
             + " · rule said \(s.heuristic.map(describe) ?? "-") · used \(used) · \(s.hit.map { $0 ? "hit" : "miss" } ?? "unscored")"
     }
 
     private static func json(_ context: PredictionContext) -> String {
         let encoder = JSONEncoder()
-        encoder.outputFormatting = [.sortedKeys]
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
         return (try? encoder.encode(context)).map { String(decoding: $0, as: UTF8.self) } ?? "{}"
     }
 
@@ -179,7 +187,7 @@ nonisolated enum PredictionPrompts {
     }
 }
 
-/// What the driver answers.
+/// What either model answers; Jev's typed answers are normalized into this shape.
 nonisolated struct DriverReply: Decodable, Sendable {
     var kind: IntentKind
     var hint: ItemHint

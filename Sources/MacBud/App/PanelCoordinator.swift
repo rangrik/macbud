@@ -35,11 +35,15 @@ final class PanelCoordinator {
     @ObservationIgnored private var peekStarted: ContinuousClock.Instant?
     /// Whether this open has read the windows All searches.
     @ObservationIgnored private var appsLoaded = false
+    /// A plain open waiting on Jev, whether it asked for the keyboard, and whether a tab hover made it.
+    @ObservationIgnored private var pendingOpen: (task: Task<Void, Never>, focus: Bool, hover: Bool)?
     static let peekHold: Duration = .milliseconds(350)
+    /// The most a plain open waits for Jev; shorter than a peek, so a quick tap still opens.
+    static let modelWait: Duration = .milliseconds(300)
 
     init(state: NotchState, notch: NotchController, settings: AppSettings,
          clipboardStore: ClipboardStore, snippetStore: SnippetStore, library: ScreenshotLibrary,
-         appIndex: AppIndex = AppIndex(), runner: any ModelRunner = CodexRunner(), shadow: (any ModelRunner)? = JevRunner()) {
+         appIndex: AppIndex = AppIndex(), driver: any ModelRunner = JevRunner(), codex: any ModelRunner = CodexRunner()) {
         self.state = state
         self.notch = notch
         self.settings = settings
@@ -62,7 +66,7 @@ final class PanelCoordinator {
         shelf = ShelfController(state: state, settings: settings, clipboard: clipboard, screenshots: screenshots,
                                 dictations: dictationHistory, snippets: snippets, apps: apps)
         predictor = SectionPredictor(settings: settings, memory: DataStore(directory: snippetStore.dataStore.directory.appendingPathComponent("predict")),
-                                     runner: runner, shadow: shadow) { [dictationHistoryStore] in
+                                     driver: driver, codex: codex) { [dictationHistoryStore] in
             PredictionContext.capture(clipboard: clipboardStore.items, media: library.items, dictations: dictationHistoryStore.items,
                                       app: NSWorkspace.shared.frontmostApplication?.bundleIdentifier,
                                       running: AppIndex.runningInFrontToBackOrder().compactMap(\.bundleIdentifier), kinds: settings.visibleKinds)
@@ -80,6 +84,8 @@ final class PanelCoordinator {
         }
         notch.onTabClick = { [weak self] screen in self?.openShelf(on: screen) }
         notch.onHoverOpen = { [weak self] screen in self?.openShelf(on: screen, focus: false) }
+        notch.onCloseRequest = { [weak self] in self?.cancelPendingOpen() }
+        notch.onHoverLeft = { [weak self] in if self?.pendingOpen?.hover == true { self?.cancelPendingOpen() } }
     }
 
     var showsWelcome: Bool { !settings.hasSeenWelcome }
@@ -114,7 +120,9 @@ final class PanelCoordinator {
     // MARK: Opening
 
     /// A plain open (hotkey, tab click, hover) lands where the prediction says, and is scored.
+    /// With no current pick it may wait up to `modelWait` for Jev; anything the owner does meanwhile calls it off.
     func openShelf(on screen: ScreenNotch? = nil, focus: Bool = true) {
+        cancelPendingOpen()
         if dictation.isActive { dictation.cancel() }
         // The welcome and "choose your features" screens live in the island, which a hover must not open.
         guard hasContent, !showsWelcome else {
@@ -126,6 +134,31 @@ final class PanelCoordinator {
             if focus { open(chip: .apps) }
             return
         }
+        let context = settings.prediction.enabled ? predictor.context() : nil
+        guard let context, predictor.wantsCallBeforeOpen(context) else { landShelf(context, openID: nil, on: screen, focus: focus); return }
+        // The display and focus are the request's, decided now, not when Jev answers.
+        let target = screen ?? notch.notchForOpen()
+        let started = ContinuousClock.now, openID = UUID().uuidString
+        let task = Task { [weak self] in
+            await self?.predictor.callBeforeOpen(context, openID: openID, budget: Self.modelWait)
+            guard let self, !Task.isCancelled else { return }
+            pendingOpen = nil
+            Trace.log("plain open waited for Jev \(ContinuousClock.now - started)")
+            // Something else opened meanwhile, or a hover left so fast its exit event was skipped.
+            guard !state.isOpen, focus || screen.map({ NSMouseInRect(NSEvent.mouseLocation, $0.window.frame, false) }) ?? true else { return }
+            landShelf(context, openID: openID, on: target, focus: focus)
+        }
+        pendingOpen = (task, focus, !focus && screen != nil)
+    }
+
+    var isOpening: Bool { pendingOpen != nil }
+
+    private func cancelPendingOpen() {
+        pendingOpen?.task.cancel()
+        pendingOpen = nil
+    }
+
+    private func landShelf(_ context: PredictionContext?, openID: String?, on screen: ScreenNotch?, focus: Bool) {
         let started = ContinuousClock.now
         prepareToOpen()
         func landing(_ intent: LandingIntent?) -> Landing {
@@ -136,7 +169,7 @@ final class PanelCoordinator {
         }
         // Once only: naming an app reads every open window.
         var landed = landing(nil)
-        if settings.prediction.enabled { _ = predictor.intentForOpen { landed = landing($0); return landed.place } }
+        if let context { _ = predictor.intentForOpen(context, openID: openID) { landed = landing($0); return landed.place } }
         state.chip = landed.chip
         state.metrics.shelfSize.height = NotchMetrics.shelfHeight(hasCards: !shelf.recents.isEmpty)
         notch.open(landed.expanded ? .expanded : .shelf, focus: focus, on: screen)
@@ -148,6 +181,7 @@ final class PanelCoordinator {
     /// Per-chip hotkeys and menu items go straight to the island on that chip. Not scored.
     func open(chip: Chip) {
         guard settings.visibleChips.contains(chip) else { return }
+        cancelPendingOpen()
         if dictation.isActive { dictation.cancel() }
         if !state.isOpen {
             prepareToOpen()
@@ -161,6 +195,8 @@ final class PanelCoordinator {
     /// The toggle hotkey. A shelf opened by hover takes the keys; anything else open closes.
     func toggle() {
         peekStarted = nil
+        // Pressed again before the shelf showed: called off, as a close would be.
+        if pendingOpen?.focus == true { cancelPendingOpen(); return }
         if state.isShelf, !notch.panel.isKeyWindow { notch.focusShelf(); return }
         if state.isOpen { notch.close(); return }
         openShelf()
@@ -171,7 +207,9 @@ final class PanelCoordinator {
     func toggleReleased() {
         guard let started = peekStarted else { return }
         peekStarted = nil
-        if state.isShelf, ContinuousClock.now - started >= Self.peekHold { notch.close() }
+        guard ContinuousClock.now - started >= Self.peekHold else { return }
+        cancelPendingOpen()
+        if state.isShelf { notch.close() }
     }
 
     /// Shelf to island. ↓ and the Search everything chip land on the first Earlier row.
@@ -224,6 +262,7 @@ final class PanelCoordinator {
     }
 
     private func beginDictation() {
+        cancelPendingOpen()
         frontmost.capture()
         context.clearHint()
         notch.openDictation()
@@ -512,6 +551,7 @@ final class PanelCoordinator {
             "draft": ["name": snippets.draft.name, "keyword": snippets.draft.keyword, "content": snippets.draft.content],
             "footer": footerHints().map { "\($0.keys) \($0.label)" },
             "prediction": predictor.dump(),
+            "opening": isOpening,
             "disabledFeatures": settings.disabledFeatures.map(\.rawValue).sorted(),
             "opensShelfOnHover": settings.opensShelfOnHover,
             "query": state.query,

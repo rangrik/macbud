@@ -27,6 +27,9 @@ final class NotchController {
     /// A click on a closed notch, and a pointer resting on one. The coordinator decides what opens.
     var onTabClick: ((ScreenNotch) -> Void)?
     var onHoverOpen: ((ScreenNotch) -> Void)?
+    /// Every close request, even with nothing open yet, and every pointer leaving a tab: either calls off a waiting open.
+    var onCloseRequest: (() -> Void)?
+    var onHoverLeft: (() -> Void)?
 
     static let openAnimation: Animation = .spring(duration: 0.38, bounce: 0.18)
     static let closeAnimation: Animation = .spring(duration: 0.26, bounce: 0)
@@ -123,6 +126,14 @@ final class NotchController {
         for screen in screens { screen.isActive = screen.displayID == id }
     }
 
+    /// The notch an open would use now: the pointer's display, else the focused window's.
+    func notchForOpen() -> ScreenNotch? {
+        syncScreens()
+        guard let screen = NotchGeometry.activeScreen() else { return nil }
+        let id = NotchGeometry.detect(on: screen).displayID
+        return screens.first { $0.displayID == id }
+    }
+
     /// Move the panel to the display the user is on. Called every time the notch is asked to open.
     private func retargetToActiveScreen() {
         syncScreens()
@@ -150,7 +161,7 @@ final class NotchController {
     private func tabHoverChanged(_ hovering: Bool, on screen: ScreenNotch) {
         state.tabHovered = hovering
         hoverTask?.cancel()
-        if !hovering { hoverNeedsExit = false }
+        if !hovering { hoverNeedsExit = false; onHoverLeft?() }
         guard hovering, !hoverNeedsExit else { return }
         let started = ContinuousClock.now
         hoverTask = Task { [weak self] in
@@ -298,6 +309,7 @@ final class NotchController {
     }
 
     func close() {
+        onCloseRequest?()
         guard state.isOpen else { return }
         leaveTask?.cancel()
         hoverNeedsExit = activeNotch.window.frame.contains(NSEvent.mouseLocation)

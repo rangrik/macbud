@@ -55,7 +55,7 @@ struct PredictionActivityView: View {
             HStack {
                 Picker("Show", selection: $filter) { ForEach(ActivityFilter.allCases) { Text($0.rawValue).tag($0) } }
                     .pickerStyle(.segmented).labelsHidden().fixedSize()
-                TextField("Search summaries, prompts and replies", text: $query).textFieldStyle(.roundedBorder)
+                TextField("Search all text", text: $query).textFieldStyle(.roundedBorder)
             }
             .padding(12)
             Divider()
@@ -89,41 +89,49 @@ struct PredictionActivityView: View {
 
     private func header(_ shown: [ActivityEntry]) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .top, spacing: 28) {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("Today").font(.caption.bold()).foregroundStyle(.secondary)
-                    let usage = PredictionActivity.usageToday(predictor.calls)
-                    if usage.isEmpty { Text("No calls") }
-                    ForEach(usage, id: \.model) { Text("\($0.model): \($0.calls) calls · \($0.tokens) tokens (\($0.cached) cached)") }
-                }
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("Last 7 days").font(.caption.bold()).foregroundStyle(.secondary)
-                    Text("Model \(predictor.rates.model.text)")
-                    Text("Rules \(predictor.rates.heuristic.text)")
+            // Actions get their own row, so the numbers below can never squeeze them.
+            HStack(spacing: 6) {
+                if predictor.isBusy {
+                    ProgressView().controlSize(.small)
+                    Text("The reviewer is running…").font(.caption).foregroundStyle(.secondary)
                 }
                 Spacer()
-                VStack(alignment: .trailing, spacing: 6) {
-                    HStack {
-                        Button("Review now") { Task { await predictor.review() } }
-                            .disabled(predictor.isBusy || !settings.prediction.useModel || predictor.sessions.isEmpty)
-                        Button("Open memory folder") {
-                            try? FileManager.default.createDirectory(at: predictor.memory.directory, withIntermediateDirectories: true)
-                            NSWorkspace.shared.open(predictor.memory.directory)
-                        }
-                        Button("Export…") { export(shown) }.disabled(shown.isEmpty)
+                HStack {
+                    Button("Review now") { Task { await predictor.review() } }
+                        .disabled(predictor.isBusy || !settings.prediction.useModel || predictor.sessions.isEmpty)
+                    Button("Open memory folder") {
+                        try? FileManager.default.createDirectory(at: predictor.memory.directory, withIntermediateDirectories: true)
+                        NSWorkspace.shared.open(predictor.memory.directory)
                     }
-                    if predictor.isBusy {
-                        HStack(spacing: 6) { ProgressView().controlSize(.small); Text("A model call is running…") }
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
+                    Button("Export…") { export(shown) }.disabled(shown.isEmpty)
                 }
+                .fixedSize()
+            }
+            let today = VStack(alignment: .leading, spacing: 3) {
+                Text("Today").font(.caption.bold()).foregroundStyle(.secondary)
+                let usage = PredictionActivity.usageToday(predictor.calls)
+                if usage.isEmpty { Text("No calls") }
+                ForEach(usage, id: \.model) { Text("\($0.model): \($0.calls) calls · \($0.tokens) tokens (\($0.cached) cached)") }
+            }.fixedSize()
+            let periods = HStack(alignment: .top, spacing: 28) {
+                ForEach(predictor.cohorts, id: \.title) { cohort in
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(cohort.title).font(.caption.bold()).foregroundStyle(.secondary)
+                        ForEach(cohort.rows, id: \.label) { Text("\($0.label) \($0.value)") }
+                    }.fixedSize()
+                }
+            }
+            // Side by side when there is room; otherwise the periods go under Today, so no figure wraps mid-phrase.
+            ViewThatFits(in: .horizontal) {
+                HStack(alignment: .top, spacing: 28) { today; periods; Spacer(minLength: 0) }
+                VStack(alignment: .leading, spacing: 10) { today; periods }
             }
             DisclosureGroup(isExpanded: $showsStrategies) {
                 Text(predictor.strategies.isEmpty ? "None yet. The reviewer writes these once misses build up." : predictor.strategies)
                     .font(.system(size: 11, design: .monospaced)).textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading).padding(.top, 4)
             } label: {
-                Text("Strategies the driver reads" + (predictor.lastReview.map { " · written \($0.formatted(date: .abbreviated, time: .shortened))" } ?? ""))
+                Text("Strategies both models read" + (predictor.lastReview.map { " · written \($0.formatted(date: .abbreviated, time: .shortened))" } ?? ""))
             }
         }
         .padding(12)

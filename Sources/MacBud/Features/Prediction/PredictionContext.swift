@@ -1,6 +1,7 @@
 import Foundation
 
-/// What the models may see about a moment. Metadata only: no text, file names, paths or window titles.
+/// What the models may see about a moment: metadata, plus the activity line with window titles and web addresses.
+/// Never item text, file names or paths.
 nonisolated struct PredictionContext: Codable, Equatable, Sendable {
     var hour: Int
     var weekday: String
@@ -16,6 +17,15 @@ nonisolated struct PredictionContext: Codable, Equatable, Sendable {
     var dictationAge: Int?
     /// Kinds the owner can reach now; hidden features drop out.
     var kinds: [IntentKind]
+    /// `ActivityLog.line`, exactly as both models get it.
+    var activity: String?
+    /// `ActivityLog.focus`: keys the cache, never sent or stored.
+    var focus: String?
+
+    enum CodingKeys: String, CodingKey {
+        case hour, weekday, app, previousApp, runningApps, clipboardKind, clipboardSource, clipboardAge, screenshotKind, screenshotAge
+        case dictationAge, kinds, activity
+    }
 
     static func capture(clipboard: [ClipboardItem], media: [MediaItem], dictations: [DictationHistoryItem],
                         app: String?, running: [String] = [], kinds: [IntentKind], now: Date = .now) -> PredictionContext {
@@ -24,7 +34,9 @@ nonisolated struct PredictionContext: Codable, Equatable, Sendable {
         let dictated = dictations.map(\.createdAt).max()
         func age(_ date: Date?) -> Int? { date.map { max(0, Int(now.timeIntervalSince($0))) } }
         let calendar = Calendar.current
-        let running = kinds.contains(.app) ? running : []
+        // Two copies of one app share a bundle id; keep the frontmost, so eight slots mean eight apps.
+        var seen = Set<String>()
+        let running = kinds.contains(.app) ? running.filter { seen.insert($0).inserted } : []
         return PredictionContext(hour: calendar.component(.hour, from: now),
                                  weekday: calendar.shortWeekdaySymbols[calendar.component(.weekday, from: now) - 1],
                                  app: app, previousApp: running.first { $0 != app },
@@ -38,7 +50,7 @@ nonisolated struct PredictionContext: Codable, Equatable, Sendable {
     var key: String {
         func recent(_ age: Int?, _ flag: String) -> String { (age ?? .max) < 120 ? flag : "" }
         let flags = recent(clipboardAge, "c") + recent(screenshotAge, "s") + recent(dictationAge, "d")
-        return [app ?? "-", String(hour), flags, clipboardKind ?? "-"].joined(separator: "|")
+        return [app ?? "-", String(hour), flags, clipboardKind ?? "-", focus ?? "-"].joined(separator: "|")
     }
 
     /// The pick that needs no model: a screenshot or dictation from the last minute, else text.
@@ -51,12 +63,14 @@ nonisolated struct PredictionContext: Codable, Equatable, Sendable {
     }
 }
 
-/// The driver's cached answer for one context key.
+/// A model's cached answer for one context key.
 nonisolated struct ModelPick: Codable, Equatable, Sendable {
     var intent: LandingIntent
     var note: String
     var key: String
     var madeAt: Date
+    /// Who answered; nil on picks made before the seats swapped.
+    var model: String?
 }
 
 /// One plain open of the island: what we predicted, and what the owner used.
@@ -67,13 +81,17 @@ nonisolated struct SessionRecord: Codable, Identifiable, Sendable {
     var model: ModelPick?
     var landed: LandingIntent
     var source: String
+    /// The model in the driver's seat; nil on opens from before Jev drove, when Luna did.
+    var driver: String?
+    /// The open request that asked Jev, so Luna's late answer scores this open and no other.
+    var openID: String?
     /// Where the open landed and where the owner acted: "shelf" or a chip. Older records name tabs.
     var opened: String
     var actedIn: String?
     var outcome: Outcome?
     var action: String?
     var secs: Double?
-    /// Jev's pick for the same moment, scored but never landed on.
+    /// The shadow's pick for the same moment, scored but never landed on.
     var shadow: ModelPick?
     var shadowHit: Bool?
     /// Nil when the owner used nothing, so there is nothing to score.
@@ -101,9 +119,13 @@ nonisolated struct CallRecord: Codable, Identifiable, Sendable {
     var tokens: TokenUsage?
     var prompt: String
     var reply: String?
-    /// The driver's Codex thread and its turn number; nil for a call that kept no thread.
+    /// Luna's Codex thread and its turn number; nil for a call that kept no thread.
     var thread: String?
     var turn: Int?
+    /// The activity line this call sent; nil on calls from before there was one.
+    var activity: String?
+    /// The open a Jev or Luna call was asked for; nil for warming and reviews.
+    var openID: String?
     var id: Date { t }
 }
 
