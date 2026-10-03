@@ -52,12 +52,13 @@ nonisolated enum PredictionActivity {
     /// Newest first. An open gets a second row for its outcome, linked to the driver call behind its pick.
     static func timeline(calls: [CallRecord], sessions: [SessionRecord], cap: Int) -> [ActivityEntry] {
         var seen = Set<String>(), entries: [ActivityEntry] = [], opensByCall: [Date: [SessionRecord]] = [:]
-        // Times are stored to the second, so two opens can share one.
-        func id(_ base: String, _ t: Date) -> String {
-            var id = "\(base) \(t.timeIntervalSince1970)"
+        // Times are stored to the second, so two opens, or an open's Jev and Luna calls, can share one.
+        func unique(_ base: String) -> String {
+            var id = base
             while !seen.insert(id).inserted { id += "+" }
             return id
         }
+        func id(_ base: String, _ t: Date) -> String { unique("\(base) \(t.timeIntervalSince1970)") }
         let drivers = calls.filter { $0.purpose == "driver" && $0.status == "ok" }
         for s in sessions {
             // A pick is cached for a while, so match the call that made it, not the call nearest the open.
@@ -72,8 +73,8 @@ nonisolated enum PredictionActivity {
         var perDay: [Date: Int] = [:]
         for c in calls {
             let kind: ActivityEntry.Kind = c.status != "ok" ? .error : c.purpose == "reviewer" ? .reviewer : .driver
-            entries.append(ActivityEntry(id: Self.id(of: c), t: c.t, kind: kind, summary: callSummary(c), call: c,
-                                         linkedOpens: opensByCall[c.t] ?? []))
+            entries.append(ActivityEntry(id: unique(Self.id(of: c)), t: c.t, kind: kind, summary: callSummary(c), call: c,
+                                         linkedOpens: c.purpose == "driver" ? opensByCall[c.t] ?? [] : []))
             guard c.purpose != "shadow" else { continue }
             let day = Calendar.current.startOfDay(for: c.t)
             perDay[day, default: 0] += 1
@@ -86,7 +87,7 @@ nonisolated enum PredictionActivity {
         return entries.enumerated().sorted { ($0.element.t, $0.offset) > ($1.element.t, $1.offset) }.map(\.element)
     }
 
-    private static func id(of call: CallRecord) -> String { "call \(call.t.timeIntervalSince1970)" }
+    private static func id(of call: CallRecord) -> String { "call \(call.purpose) \(call.t.timeIntervalSince1970)" }
 
     /// Calls and tokens per model today; Settings and the Activity window show the same numbers.
     /// Cached input is counted apart because it is billed at a fraction of the rest.
@@ -137,7 +138,7 @@ nonisolated enum PredictionActivity {
             let context = c.prompt.split(separator: "\n").last { $0.hasPrefix("{") }
             out.append(ActivityDetail(title: "Context sent", text: pretty(context.map { Data($0.utf8) }), isCode: true))
         }
-        if entry.kind == .driver {
+        if entry.kind == .driver, c.purpose == "driver" {
             let opens = entry.linkedOpens.map { s in
                 "\(s.t.formatted(date: .omitted, time: .standard)) · opened \(s.opened) on \(describe(s.landed)) · "
                     + (s.outcome.map { "used \(describe($0)), \(s.hit == true ? "hit" : "miss")" } ?? "used nothing")

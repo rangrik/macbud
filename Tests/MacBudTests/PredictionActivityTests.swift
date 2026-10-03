@@ -24,6 +24,27 @@ import Testing
         #expect(rows[6].linkedOpens.count == 1 && rows[5].linkedOpens.isEmpty)
     }
 
+    /// Seam: calls read back from the ledger → rows and links. Catches a Jev and a Luna call from one second (the ledger
+    /// keeps whole seconds) sharing a row, and an open linked to the Luna call instead of Jev's.
+    @Test func callsFromOneSecondKeepTheirOwnRows() async throws {
+        let memory = DataStore(directory: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString))
+        let t = Date(timeIntervalSince1970: Date.now.timeIntervalSince1970.rounded(.down) + 0.1)
+        let reply = #"{"kind":"text","hint":"any","confidence":0.9,"note":"n"}"#
+        await memory.appendLine(CallRecord(t: t, purpose: "driver", model: "jev-latest", effort: "-", prompt: "p", reply: reply), to: "calls.jsonl")
+        await memory.appendLine(CallRecord(t: t + 0.4, purpose: "shadow", model: "gpt-6-luna", effort: "medium", prompt: "p", reply: reply),
+                                to: "calls.jsonl")
+        let calls = await memory.lines(CallRecord.self, in: "calls.jsonl")
+        #expect(calls.count == 2 && calls[0].t == calls[1].t, "the ledger keeps whole seconds")
+        let pick = ModelPick(intent: LandingIntent(kind: .text), note: "n", key: "k", madeAt: t + 0.2, model: "jev-latest")
+        let open = SessionRecord(t: t + 2, context: PredictionContext(hour: 10, weekday: "Thu", kinds: [.text]), model: pick,
+                                 landed: pick.intent, source: "model", driver: "jev-latest", opened: "shelf")
+        let rows = PredictionActivity.timeline(calls: calls, sessions: [open], cap: 100)
+        let jev = try #require(rows.first { $0.call?.purpose == "driver" }), luna = try #require(rows.first { $0.call?.purpose == "shadow" })
+        #expect(Set(rows.map(\.id)).count == rows.count && jev.linkedOpens.count == 1 && luna.linkedOpens.isEmpty)
+        let open1 = try #require(rows.first { $0.kind == .open })
+        #expect(PredictionActivity.details(open1).first { $0.link != nil }?.link == jev.id)
+    }
+
     /// Seam: records → their details. Catches an activity line recomputed, dropped or shown with escaped slashes, an old call
     /// claiming activity, and an open from before the swap relabelled as Jev driving with Luna in the shadow.
     @Test func detailsShowTheActivitySentAndKeepOldLabels() {
