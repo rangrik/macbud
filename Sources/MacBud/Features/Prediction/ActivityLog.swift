@@ -9,12 +9,23 @@ nonisolated struct ActivityEvent: Codable, Equatable, Sendable {
     var url: String?
     var role: String?
 
-    /// A secure field yields the marker alone: that window's title and address are never read.
+    /// Words that make a window with unknown focus look like a sign-in page. Extend here.
+    static let signInWords = ["login", "log in", "sign in", "signin", "password", "auth", "2fa", "verify"]
+
+    /// A secure field yields the marker alone: that window's title and address are never read. With focus unknown a
+    /// secure field cannot be ruled out, so a window that looks like a sign-in page keeps only the app (best effort).
     static func read(t: Date, app: String?, role: String?, subrole: String?, window: () -> (title: String?, url: Any?)) -> ActivityEvent {
         guard role != kAXSecureTextFieldSubrole, subrole != kAXSecureTextFieldSubrole else { return ActivityEvent(t: t, app: app, role: "secure field") }
         let (title, url) = window()
-        return ActivityEvent(t: t, app: app, title: title.flatMap { $0.isEmpty ? nil : String($0.prefix(200)) }, url: webAddress(url),
-                             role: role.map(words))
+        let address = webAddress(url)
+        if role == nil {
+            let path = address?.split(separator: "/", maxSplits: 1).dropFirst().first.map(String.init) ?? ""
+            if [title ?? "", path].contains(where: { text in signInWords.contains { text.localizedCaseInsensitiveContains($0) } }) {
+                return ActivityEvent(t: t, app: app, role: "focus unknown")
+            }
+        }
+        return ActivityEvent(t: t, app: app, title: title.flatMap { $0.isEmpty ? nil : String($0.prefix(200)) }, url: address,
+                             role: role.map(words) ?? "focus unknown")
     }
 
     /// Web pages only, as host and path: no file paths, queries or fragments.

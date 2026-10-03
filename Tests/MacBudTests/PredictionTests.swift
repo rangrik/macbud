@@ -110,8 +110,9 @@ import Testing
         }
     }
 
-    /// Seam: an Accessibility read → the recorded event. Catches reading while locked, idle or untrusted,
-    /// a secure field's window being read, and file paths, user-info, queries or fragments kept as web addresses.
+    /// Seam: an Accessibility read → the recorded event. Catches reading while locked, idle or untrusted, a secure field's
+    /// window being read, file paths, user-info, queries or fragments kept as web addresses, and with focus unknown: a
+    /// sign-in title or path (any case) keeping its title or address, an ordinary page losing them, or no marker.
     @Test func activityRecordsOnlyWhatIsAllowed() {
         for (trusted, locked, idle) in [(false, false, 0.0), (true, true, 0), (true, false, 300)] {
             #expect(ActivityProbe.gate(trusted: trusted, locked: locked, idle: idle) { Issue.record("read while blocked"); return nil } == nil)
@@ -126,6 +127,13 @@ import Testing
         }
         #expect(page.title == "Pull requests" && page.url == "github.com/rangrik/macbud/pulls" && page.role == "text area")
         for raw in ["file:///Users/owner/Private/Plan.pdf", "not a url", 42] as [Any] { #expect(ActivityEvent.webAddress(raw) == nil) }
+        let signIn: [(String, String)] = [("Bank", "https://bank.example/SignIn?next=1"), ("Log In to Bank", "https://bank.example/home")]
+        for (title, url) in signIn {
+            let unknown = ActivityEvent.read(t: page.t, app: "com.google.Chrome", role: nil, subrole: nil) { (title, URL(string: url)) }
+            #expect(unknown == ActivityEvent(t: page.t, app: "com.google.Chrome", role: "focus unknown"))
+        }
+        let plain = ActivityEvent.read(t: page.t, app: "com.google.Chrome", role: nil, subrole: nil) { ("Docs", URL(string: "https://docs.example/guide")) }
+        #expect(plain == ActivityEvent(t: page.t, app: "com.google.Chrome", title: "Docs", url: "docs.example/guide", role: "focus unknown"))
     }
 
     /// Seam: recorded events → the activity file and the line both models read. Catches a day-old event surviving a relaunch,
